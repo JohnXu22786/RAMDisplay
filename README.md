@@ -90,4 +90,4 @@ the Actions tab -> Build & Release -> Run workflow.
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0

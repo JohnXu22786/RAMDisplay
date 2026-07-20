@@ -446,7 +446,7 @@ def show_about() -> None:
             "A lightweight system tray memory monitor\n"
             "for Windows 10 / 11.\n\n"
             "Author: " + AUTHOR + "\n"
-            "License: MIT\n"
+            "License: AGPL-3.0\n"
             + GITHUB_URL + "\n\n"
             "Data refreshes every second.\n"
             "Built with Python, psutil, pystray, Pillow.",
@@ -510,6 +510,21 @@ def main() -> None:
             time.sleep(1)
 
     threading.Thread(target=updater, daemon=True).start()
+
+    # -- Non-blocking startup update check -------------------------
+    # Runs once in background; sets tooltip if new version found.
+    def _startup_check() -> None:
+        try:
+            latest = check_for_updates()
+            if latest is not None:
+                icon.title = (
+                    "Update v" + latest + " available!\n"
+                    "Right-click -> Check for Updates"
+                )
+        except Exception:
+            pass
+
+    threading.Thread(target=_startup_check, daemon=True).start()
     icon.run()
 
 
