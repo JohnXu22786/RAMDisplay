@@ -362,19 +362,29 @@ def check_for_updates(silent_if_current: bool = True) -> str | None:
 #  About dialog
 # -----------------------------------------------------------------------
 
+def _msgbox_async(title: str, message: str) -> None:
+    """Show a MessageBox in a background thread so pystray's loop is not blocked."""
+    threading.Thread(
+        target=_user32.MessageBoxW,
+        args=(0, message, title, 0),
+        daemon=True,
+    ).start()
+
+
 def show_about() -> None:
-    """Display a simple About dialog using Windows MessageBox."""
+    """Display a simple About dialog using Windows MessageBox (non-blocking)."""
     title = f"About {APP_NAME} v{VERSION}"
     message = (
         f"{APP_NAME} v{VERSION}\n\n"
         f"A lightweight system tray memory monitor\n"
         f"for Windows 10 / 11.\n\n"
         f"Author: {AUTHOR}\n"
+        f"License: MIT\n"
         f"{GITHUB_URL}\n\n"
         f"Data refreshes every second.\n"
         f"Built with Python, psutil, pystray, Pillow."
     )
-    _user32.MessageBoxW(0, message, title, 0)
+    _msgbox_async(title, message)
 
 
 # -----------------------------------------------------------------------
@@ -390,13 +400,12 @@ def main() -> None:
 
     def _on_autostart(icon: pystray.Icon) -> None:
         set_autostart(not is_autostart_enabled())
-        # Force a menu refresh so the checkmark updates immediately
         icon.update_menu()
 
     def _on_check_updates(icon: pystray.Icon) -> None:
         msg = check_for_updates(silent_if_current=False)
         if msg:
-            _user32.MessageBoxW(0, msg, f"{APP_NAME} - Update Check", 0)
+            _msgbox_async(f"{APP_NAME} - Update Check", msg)
 
     def _on_exit(icon: pystray.Icon) -> None:
         icon.stop()
@@ -415,42 +424,30 @@ def main() -> None:
         pystray.MenuItem("Exit", _on_exit),
     )
 
-    icon = pystray.Icon(APP_NAME, make_icon(0), APP_NAME, menu)
+    initial_tip = f"{APP_NAME} v{VERSION}\nInitializing..."
+    icon = pystray.Icon(APP_NAME, make_icon(0), initial_tip, menu)
 
     # -- Background updater thread ----------------------------------
     # Updates icon graphic and tooltip text every second.
 
     def updater() -> None:
-        # Give the icon a moment to initialize before updating
-        time.sleep(0.5)
+        # Wait a tiny bit for the icon to register with the shell
+        time.sleep(0.3)
 
-        # First update: check for new release silently
-        update_msg = check_for_updates(silent_if_current=True)
-        if update_msg:
-            try:
-                icon.title = f"{APP_NAME} v{VERSION}\n{update_msg}"
-            except Exception:
-                pass
-            time.sleep(3)
+        # Check for newer release (silent, background)
+        new_ver_msg = check_for_updates(silent_if_current=True)
 
         while True:
             try:
                 pct, tip = collect()
                 icon.icon = make_icon(pct)
-                icon.title = f"{APP_NAME} v{VERSION}\n{tip}"
+                full_tip = f"{APP_NAME} v{VERSION}\n{tip}"
+                icon.title = full_tip
             except Exception:
                 pass
             time.sleep(1)
 
     threading.Thread(target=updater, daemon=True).start()
-
-    # Suppress stderr in frozen mode to prevent console flash on crash
-    if getattr(sys, "frozen", False):
-        try:
-            sys.stderr = open(os.devnull, "w")
-        except Exception:
-            pass
-
     icon.run()
 
 
@@ -458,6 +455,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        # Silent crash for frozen exe - no console dialog
+        # Frozen exe: let it die silently (no crash dialog)
         if not getattr(sys, "frozen", False):
             raise
