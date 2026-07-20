@@ -408,7 +408,7 @@ def main() -> None:
         pystray.MenuItem(
             "Auto-start with Windows",
             _on_autostart,
-            checked=lambda: is_autostart_enabled(),
+            checked=lambda item: is_autostart_enabled(),
         ),
         pystray.MenuItem("Check for Updates", _on_check_updates),
         pystray.Menu.SEPARATOR,
@@ -419,33 +419,45 @@ def main() -> None:
 
     # -- Background updater thread ----------------------------------
     # Updates icon graphic and tooltip text every second.
-    update_count = [0]  # mutable box to track cycles
 
     def updater() -> None:
+        # Give the icon a moment to initialize before updating
+        time.sleep(0.5)
+
         # First update: check for new release silently
         update_msg = check_for_updates(silent_if_current=True)
         if update_msg:
-            icon.title = f"{APP_NAME} v{VERSION}\n{update_msg}"
+            try:
+                icon.title = f"{APP_NAME} v{VERSION}\n{update_msg}"
+            except Exception:
+                pass
             time.sleep(3)
 
         while True:
             try:
                 pct, tip = collect()
                 icon.icon = make_icon(pct)
-                # Prepend version info on first cycle, tooltip otherwise
-                # (tooltip starts with version so the user sees it on hover)
-                if update_count[0] == 0:
-                    icon.title = f"{APP_NAME} v{VERSION}\n{tip}"
-                else:
-                    icon.title = tip
-                update_count[0] += 1
-            except Exception as e:
-                icon.title = f"{APP_NAME} - Error: {e}"
+                icon.title = f"{APP_NAME} v{VERSION}\n{tip}"
+            except Exception:
+                pass
             time.sleep(1)
 
     threading.Thread(target=updater, daemon=True).start()
+
+    # Suppress stderr in frozen mode to prevent console flash on crash
+    if getattr(sys, "frozen", False):
+        try:
+            sys.stderr = open(os.devnull, "w")
+        except Exception:
+            pass
+
     icon.run()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Silent crash for frozen exe - no console dialog
+        if not getattr(sys, "frozen", False):
+            raise

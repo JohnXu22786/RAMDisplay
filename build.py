@@ -54,9 +54,10 @@ def bump_version() -> str:
 
 
 def build() -> None:
-    """Run PyInstaller to create the standalone executable."""
+    """Run PyInstaller to create a versioned standalone executable."""
     version = _read_version()
-    print(f"Building {APP_NAME} v{version} ...")
+    exe_name = f"{APP_NAME}-v{version}"
+    print(f"Building {exe_name} ...")
 
     # Ensure PyInstaller is installed
     subprocess.check_call(
@@ -82,14 +83,14 @@ def build() -> None:
             "--onefile",
             "--noconsole",
             "--name",
-            APP_NAME,
+            exe_name,
             "--distpath",
             "dist",
             VERSION_FILE,
         ]
     )
 
-    exe_path = os.path.join("dist", f"{APP_NAME}.exe")
+    exe_path = os.path.join("dist", f"{exe_name}.exe")
     if os.path.exists(exe_path):
         size_mb = os.path.getsize(exe_path) / (1024 * 1024)
         print(f"  OK: {exe_path} ({size_mb:.1f} MB)")

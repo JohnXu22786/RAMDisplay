@@ -8,11 +8,12 @@ on:
       version_bump:
         description: Version bump type
         required: false
-        default: 'none'
+        default: 'patch'
         type: choice
         options:
-          - none
           - patch
+          - minor
+          - major
 
 permissions:
   contents: write
@@ -22,67 +23,97 @@ jobs:
     runs-on: windows-latest
 
     outputs:
-      version: ${{ steps.extract.outputs.version }}
+      version: ${{ steps.bump.outputs.version }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Need full history and token to push version bump back
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
-      - name: Bump version (patch)
-        if: github.event.inputs.version_bump == 'patch'
-        shell: python
-        run: |
-          import re
-          with open('ramdisplay.py', encoding='utf-8') as f:
-            c = f.read()
-          m = re.search(r'^VERSION\s*=\s*"(.+?)"', c, re.MULTILINE)
-          parts = [int(x) for x in m.group(1).split('.')]
-          parts[-1] += 1
-          new = '.'.join(str(p) for p in parts)
-          c = re.sub(r'^VERSION\s*=\s*".+?"', f'VERSION = "{new}"', c, count=1, flags=re.MULTILINE)
-          with open('ramdisplay.py', 'w', encoding='utf-8') as f:
-            f.write(c)
-          print(f'Bumped to {new}')
-
-      - name: Extract version
-        id: extract
+      # ── Auto-bump version ────────────────────────────────────
+      # On push to main: always bump patch
+      # On workflow_dispatch: respect user choice
+      - name: Bump version
+        id: bump
         shell: python
         run: |
           import os, re
+
+          bump_type = os.environ['BUMP_TYPE']
+
           with open('ramdisplay.py', encoding='utf-8') as f:
             c = f.read()
-          m = re.search(r'^VERSION\s*=\s*"(.+?)"', c, re.MULTILINE)
-          ver = m.group(1) if m else '0.0.0'
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-            f.write(f'version={ver}\n')
-          print(f'VERSION={ver}')
 
+          m = re.search(r'^VERSION\s*=\s*"(.+?)"', c, re.MULTILINE)
+          old_ver = m.group(1)
+          parts = [int(x) for x in old_ver.split('.')]
+
+          if bump_type == 'major':
+            parts = [parts[0] + 1, 0, 0]
+          elif bump_type == 'minor':
+            parts = [parts[0], parts[1] + 1, 0]
+          else:  # patch
+            parts[-1] += 1
+
+          new_ver = '.'.join(str(p) for p in parts)
+          c = re.sub(
+            r'^VERSION\s*=\s*".+?"',
+            f'VERSION = "{new_ver}"',
+            c, count=1, flags=re.MULTILINE,
+          )
+
+          with open('ramdisplay.py', 'w', encoding='utf-8') as f:
+            f.write(c)
+
+          print(f'{old_ver} -> {new_ver}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f'version={new_ver}\n')
+        env:
+          BUMP_TYPE: ${{ github.event.inputs.version_bump || 'patch' }}
+
+      # ── Commit version bump back to main ─────────────────────
+      - name: Commit version bump
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ramdisplay.py
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }} [skip ci]"
+          git push
+
+      # ── Install dependencies ─────────────────────────────────
       - name: Install dependencies
         run: |
           pip install -r requirements.txt pyinstaller
 
+      # ── Build versioned exe ───────────────────────────────────
       - name: Build with PyInstaller
         run: |
-          pyinstaller --onefile --noconsole --name RAMDisplay ramdisplay.py
+          $ver = "${{ steps.bump.outputs.version }}"
+          pyinstaller --onefile --noconsole --name "RAMDisplay-v$ver" ramdisplay.py
 
+      # ── Create / update GitHub Release ───────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.extract.outputs.version }}
-          name: RAMDisplay v${{ steps.extract.outputs.version }}
+          tag_name: v${{ steps.bump.outputs.version }}
+          name: RAMDisplay v${{ steps.bump.outputs.version }}
           body: |
-            ## RAMDisplay v${{ steps.extract.outputs.version }}
+            ## RAMDisplay v${{ steps.bump.outputs.version }}
 
             System tray memory monitor for Windows 10/11.
 
-            ### What's new
-            - See the release notes for details.
-          files: dist/RAMDisplay.exe
+            ### Changelog
+            - Auto-built from commit `${{ github.sha }}`
+          files: dist/RAMDisplay-v${{ steps.bump.outputs.version }}.exe
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
