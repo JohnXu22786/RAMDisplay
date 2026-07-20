@@ -331,60 +331,130 @@ def _get_latest_version() -> str | None:
         return None
 
 
-def check_for_updates(silent_if_current: bool = True) -> str | None:
-    """Check GitHub for a newer release.
-
-    Returns a message string if an update is available (or on error when
-    *silent_if_current* is False), otherwise None.
-    """
+def check_for_updates() -> str | None:
+    """Check GitHub for a newer release. Returns the latest version or None."""
     latest = _get_latest_version()
     if latest is None:
-        if not silent_if_current:
-            return "Could not check for updates.\nCheck your internet connection."
         return None
-
     current = _parse_version(VERSION)
     remote = _parse_version(latest)
-
     if remote > current:
-        return (
-            f"A new version is available!\n\n"
-            f"Current:  v{VERSION}\n"
-            f"Latest:   v{latest}\n\n"
-            f"Visit: {GITHUB_URL}/releases"
-        )
-    if not silent_if_current:
-        return f"You are up to date (v{VERSION})."
+        return latest
     return None
+
+
+# -----------------------------------------------------------------------
+#  Auto-update (download & self-replace)
+# -----------------------------------------------------------------------
+
+_stop_icon: pystray.Icon | None = None  # set by main() for background thread
+
+
+def _do_update_check() -> None:
+    """Background thread: check for update, ask user, download & replace."""
+    global _stop_icon
+    latest = check_for_updates()
+    if latest is None:
+        _user32.MessageBoxW(
+            0, "You are up to date (v" + VERSION + ").",
+            APP_NAME + " - Update Check", 0,
+        )
+        return
+
+    rc = _user32.MessageBoxW(
+        0,
+        "A new version is available!\n\n"
+        "Current:  v" + VERSION + "\n"
+        "Latest:   v" + latest + "\n\n"
+        "Download and install now?",
+        APP_NAME + " - Update Available",
+        0x04 | 0x20 | 0x10000,  # MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND
+    )
+    if rc != 6:  # IDYES
+        return
+
+    # --- Download --------------------------------------------------
+    if not getattr(sys, "frozen", False):
+        _user32.MessageBoxW(
+            0, "Auto-update only works with the .exe version.\n"
+               "Please download manually from:\n" + GITHUB_URL + "/releases",
+            APP_NAME + " - Update", 0,
+        )
+        return
+
+    exe_name = APP_NAME + "-v" + latest + ".exe"
+    url = (GITHUB_URL + "/releases/download/v" + latest + "/" + exe_name)
+    temp_exe = os.path.join(os.environ["TEMP"], exe_name)
+
+    try:
+        # Notify: downloading
+        _user32.MessageBoxW(
+            0, "Downloading " + exe_name + " ...\n\n"
+               "The app will restart automatically when done.",
+            APP_NAME + " - Downloading", 0,
+        )
+
+        urllib.request.urlretrieve(url, temp_exe)
+
+        # Verify the downloaded file exists
+        if not os.path.isfile(temp_exe):
+            raise RuntimeError("Download failed - file not found")
+
+        current_exe = sys.executable
+
+        # Create update batch script
+        bat_path = os.path.join(os.environ["TEMP"], "update_ramdisplay.bat")
+        with open(bat_path, "w", encoding="ascii") as f:
+            f.write(
+                "@echo off\r\n"
+                "title Updating RAMDisplay...\r\n"
+                ":wait\r\n"
+                'tasklist /FI "IMAGENAME eq ' + APP_NAME + '-v*.exe" '
+                "2>NUL | find /I /N \"" + APP_NAME + "-\" >NUL\r\n"
+                'if "%ERRORLEVEL%"=="0" (\r\n'
+                "    timeout /T 1 /NOBREAK >NUL\r\n"
+                "    goto wait\r\n"
+                ")\r\n"
+                'move /Y "' + temp_exe + '" "' + current_exe + '"\r\n'
+                'start "" "' + current_exe + '"\r\n'
+                "del \"%~f0\"\r\n"
+            )
+
+        # Launch the updater (hidden) and exit
+        ctypes.windll.kernel32.WinExec(bat_path, 0)  # SW_HIDE
+        if _stop_icon:
+            _stop_icon.stop()  # triggers exit
+
+    except Exception as e:
+        _user32.MessageBoxW(
+            0, "Update failed:\n" + str(e),
+            APP_NAME + " - Error", 0x10,  # MB_ICONERROR
+        )
 
 
 # -----------------------------------------------------------------------
 #  About dialog
 # -----------------------------------------------------------------------
 
-def _msgbox_async(title: str, message: str) -> None:
-    """Show a MessageBox in a background thread so pystray's loop is not blocked."""
+def show_about() -> None:
+    """Display About dialog (non-blocking, own thread)."""
     threading.Thread(
         target=_user32.MessageBoxW,
-        args=(0, message, title, 0),
+        args=(
+            0,
+            APP_NAME + " v" + VERSION + "\n\n"
+            "A lightweight system tray memory monitor\n"
+            "for Windows 10 / 11.\n\n"
+            "Author: " + AUTHOR + "\n"
+            "License: MIT\n"
+            + GITHUB_URL + "\n\n"
+            "Data refreshes every second.\n"
+            "Built with Python, psutil, pystray, Pillow.",
+            "About " + APP_NAME + " v" + VERSION,
+            0,
+        ),
         daemon=True,
     ).start()
-
-
-def show_about() -> None:
-    """Display a simple About dialog using Windows MessageBox (non-blocking)."""
-    title = f"About {APP_NAME} v{VERSION}"
-    message = (
-        f"{APP_NAME} v{VERSION}\n\n"
-        f"A lightweight system tray memory monitor\n"
-        f"for Windows 10 / 11.\n\n"
-        f"Author: {AUTHOR}\n"
-        f"License: MIT\n"
-        f"{GITHUB_URL}\n\n"
-        f"Data refreshes every second.\n"
-        f"Built with Python, psutil, pystray, Pillow."
-    )
-    _msgbox_async(title, message)
 
 
 # -----------------------------------------------------------------------
@@ -403,9 +473,9 @@ def main() -> None:
         icon.update_menu()
 
     def _on_check_updates(icon: pystray.Icon) -> None:
-        msg = check_for_updates(silent_if_current=False)
-        if msg:
-            _msgbox_async(f"{APP_NAME} - Update Check", msg)
+        global _stop_icon
+        _stop_icon = icon
+        threading.Thread(target=_do_update_check, daemon=True).start()
 
     def _on_exit(icon: pystray.Icon) -> None:
         icon.stop()
@@ -424,25 +494,17 @@ def main() -> None:
         pystray.MenuItem("Exit", _on_exit),
     )
 
-    initial_tip = f"{APP_NAME} v{VERSION}\nInitializing..."
-    icon = pystray.Icon(APP_NAME, make_icon(0), initial_tip, menu)
+    icon = pystray.Icon(APP_NAME, make_icon(0), APP_NAME + " v" + VERSION, menu)
 
     # -- Background updater thread ----------------------------------
     # Updates icon graphic and tooltip text every second.
 
     def updater() -> None:
-        # Wait a tiny bit for the icon to register with the shell
-        time.sleep(0.3)
-
-        # Check for newer release (silent, background)
-        new_ver_msg = check_for_updates(silent_if_current=True)
-
         while True:
             try:
                 pct, tip = collect()
                 icon.icon = make_icon(pct)
-                full_tip = f"{APP_NAME} v{VERSION}\n{tip}"
-                icon.title = full_tip
+                icon.title = tip
             except Exception:
                 pass
             time.sleep(1)
@@ -455,6 +517,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        # Frozen exe: let it die silently (no crash dialog)
         if not getattr(sys, "frozen", False):
             raise
