@@ -1,0 +1,88 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: Version bump type
+        required: false
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - patch
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Bump version (patch)
+        if: github.event.inputs.version_bump == 'patch'
+        shell: python
+        run: |
+          import re
+          with open('ramdisplay.py') as f:
+            c = f.read()
+          m = re.search(r'^VERSION\s*=\s*"(.+?)"', c, re.MULTILINE)
+          parts = [int(x) for x in m.group(1).split('.')]
+          parts[-1] += 1
+          new = '.'.join(str(p) for p in parts)
+          c = re.sub(r'^VERSION\s*=\s*".+?"', f'VERSION = "{new}"', c, count=1, flags=re.MULTILINE)
+          with open('ramdisplay.py', 'w') as f:
+            f.write(c)
+          print(f'Bumped to {new}')
+
+      - name: Extract version
+        id: extract
+        shell: python
+        run: |
+          import os, re
+          with open('ramdisplay.py') as f:
+            c = f.read()
+          m = re.search(r'^VERSION\s*=\s*"(.+?)"', c, re.MULTILINE)
+          ver = m.group(1) if m else '0.0.0'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f'version={ver}\n')
+          print(f'VERSION={ver}')
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --noconsole --name RAMDisplay ramdisplay.py
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.extract.outputs.version }}
+          name: RAMDisplay v${{ steps.extract.outputs.version }}
+          body: |
+            ## RAMDisplay v${{ steps.extract.outputs.version }}
+
+            System tray memory monitor for Windows 10/11.
+
+            ### What's new
+            - See the release notes for details.
+          files: dist/RAMDisplay.exe
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
