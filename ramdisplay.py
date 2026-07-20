@@ -1,5 +1,5 @@
 """
-RAMDisplay — System Tray Memory Monitor for Windows 10/11
+RAMDisplay -- System Tray Memory Monitor for Windows 10/11
 
 Hover over the tray icon to see real-time memory metrics
 (updated every second) matching Task Manager -> Performance -> Memory.
@@ -27,18 +27,18 @@ import pystray
 from PIL import Image, ImageDraw, ImageFont
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 #  App metadata
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 
 VERSION = "0.1.0"
 AUTHOR = "JohnXu22786"
 GITHUB_URL = "https://github.com/JohnXu22786/RAMDisplay"
 APP_NAME = "RAMDisplay"
 
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 #  Windows API structures
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 
 class PERFORMANCE_INFORMATION(ctypes.Structure):
     _fields_ = [
@@ -94,9 +94,9 @@ def _get_mem_status() -> MEMORYSTATUSEX | None:
     return None
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 #  Formatting helper
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 
 def _fmt(b: float | int | None, dec: int = 1) -> str:
     """Format bytes into a human-friendly string (B / KB / MB / GB / TB)."""
@@ -109,9 +109,9 @@ def _fmt(b: float | int | None, dec: int = 1) -> str:
     return f"{b:.{dec}f} PB"
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 #  Memory data collector
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 
 def _get_counter(path: str) -> int | None:
     """Query a single PDH performance counter; return integer value or None."""
@@ -207,9 +207,9 @@ def collect() -> tuple[float, str]:
     return percent, "\n".join(lines)
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 #  Tray icon drawing
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 
 def make_icon(percent: float) -> Image.Image:
     """Create a 64x64 RGBA tray icon colored by memory usage."""
@@ -252,9 +252,9 @@ def make_icon(percent: float) -> Image.Image:
     return img
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 #  Auto-start (registry)
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 
 AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 AUTOSTART_NAME = APP_NAME
@@ -299,9 +299,9 @@ def set_autostart(enabled: bool) -> None:
         winreg.CloseKey(key)
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 #  Update check (GitHub Releases API)
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 
 def _parse_version(v: str) -> tuple[int, ...]:
     """Convert a dotted version string to a comparable tuple."""
@@ -358,9 +358,9 @@ def check_for_updates(silent_if_current: bool = True) -> str | None:
     return None
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 #  About dialog
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 
 def show_about() -> None:
     """Display a simple About dialog using Windows MessageBox."""
@@ -377,14 +377,14 @@ def show_about() -> None:
     _user32.MessageBoxW(0, message, title, 0)
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 #  Entry point
-# ═══════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------
 
 def main() -> None:
     """Create the tray icon, build the menu, start the updater thread."""
 
-    # ── Menu actions ───────────────────────────────────────────────
+    # -- Menu actions -----------------------------------------------
     def _on_about(icon: pystray.Icon) -> None:
         show_about()
 
@@ -401,7 +401,7 @@ def main() -> None:
     def _on_exit(icon: pystray.Icon) -> None:
         icon.stop()
 
-    # ── Build menu ─────────────────────────────────────────────────
+    # -- Build menu -------------------------------------------------
     menu = pystray.Menu(
         pystray.MenuItem("About", _on_about, default=True),
         pystray.Menu.SEPARATOR,
@@ -417,7 +417,7 @@ def main() -> None:
 
     icon = pystray.Icon(APP_NAME, make_icon(0), APP_NAME, menu)
 
-    # ── Background updater thread ──────────────────────────────────
+    # -- Background updater thread ----------------------------------
     # Updates icon graphic and tooltip text every second.
     update_count = [0]  # mutable box to track cycles
 
