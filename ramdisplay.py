@@ -142,6 +142,9 @@ def _get_cached_bytes() -> int | None:
 
 MemInfo = dict
 
+# 60-second history maintained by the updater thread (global)
+_history: list[float] = [0.0] * 60
+
 
 def collect() -> MemInfo:
     """
@@ -215,25 +218,31 @@ def collect() -> MemInfo:
 # -----------------------------------------------------------------------
 
 def make_icon(percent: float) -> Image.Image:
-    """Create a 64x64 tray icon: just the percentage number, big & clear."""
+    """Create a 64x64 tray icon: circle with centred number."""
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     if percent < 50:
-        color = (76, 175, 80)
+        color = (76, 175, 80)      # green
     elif percent < 80:
-        color = (255, 193, 7)
+        color = (200, 160, 50)     # amber
     else:
-        color = (244, 67, 54)
+        color = (180, 55, 55)      # soft red
 
-    draw.rounded_rectangle(
-        [1, 1, size - 2, size - 2], radius=10,
-        fill=color + (230,),
+    # Circle
+    m = 2
+    draw.ellipse(
+        [m, m, size - m, size - m],
+        fill=color + (220,),
+        outline=color,
+        width=2,
     )
+
+    # Large centred number
     text = f"{int(percent)}"
     try:
-        font = ImageFont.truetype("segoeui.ttf", 30)
+        font = ImageFont.truetype("segoeui.ttf", 28)
     except Exception:
         font = ImageFont.load_default()
 
@@ -515,186 +524,237 @@ def _open_memory_panel() -> None:
         show_about()
         return
 
+    # -- Theme colours -----------------------------------------------
     BG = "#202020"
     FG = "#ffffff"
     FG_DIM = "#888888"
-    FG_VAL = "#ffffff"
     GRAPH_BG = "#0e1621"
     GRAPH_LINE = "#3a9adb"
     GRAPH_GRID = "#2a2a3a"
-    BAR_OUTLINE = "#555555"
+    BAR_BORDER = "#555555"
     COMP_INUSE = "#1a3a5c"
     COMP_CACHED = "#2176ae"
     COMP_FREE = "#101020"
 
+    # -- Main window -------------------------------------------------
     root = tk.Tk()
     _memory_panel_window = root
     root.title("Memory")
     root.configure(bg=BG)
     root.resizable(False, False)
 
-    # --- Header: "Memory" + total RAM -----------------------------
-    hdr = tk.Frame(root, bg=BG)
+    # -- State -------------------------------------------------------
+    state = {"pinned": False, "drag_x": 0, "drag_y": 0}
+
+    # == NORMAL CONTENT (hidden when pinned) =========================
+    normal_frame = tk.Frame(root, bg=BG)
+    normal_frame.pack(fill=tk.BOTH, expand=True)
+
+    # --- Header: "Memory" + total RAM -------------------------------
+    hdr = tk.Frame(normal_frame, bg=BG)
     hdr.pack(fill=tk.X, padx=16, pady=(12, 0))
     tk.Label(hdr, text="Memory", font=("Segoe UI", 20, "bold"),
              fg=FG, bg=BG).pack(side=tk.LEFT)
-    hdr_right = tk.Frame(hdr, bg=BG)
-    hdr_right.pack(side=tk.RIGHT)
-    total_gb = [0.0]  # mutable; set on first update
-
-    total_lbl = tk.Label(hdr_right, text="-- GB",
+    total_lbl = tk.Label(hdr, text="-- GB",
                          font=("Segoe UI", 11), fg=FG_DIM, bg=BG)
     total_lbl.pack(side=tk.RIGHT)
 
-    # --- Memory usage subtitle ------------------------------------
-    tk.Label(root, text="Memory usage", font=("Segoe UI", 10),
+    # --- "Memory usage" subtitle ------------------------------------
+    tk.Label(normal_frame, text="Memory usage", font=("Segoe UI", 10),
              fg=FG_DIM, bg=BG).pack(anchor="w", padx=16, pady=(8, 2))
 
-    # --- Graph canvas (60-second history) -------------------------
-    graph_frame = tk.Frame(root, bg=BAR_OUTLINE, bd=1, relief="solid")
-    graph_frame.pack(fill=tk.X, padx=16)
-
-    graph_canvas = tk.Canvas(graph_frame, height=140, bg=GRAPH_BG,
+    # --- Graph canvas (60 s) with border ---------------------------
+    graph_outer = tk.Frame(normal_frame, bg=BAR_BORDER, bd=1, relief="solid")
+    graph_outer.pack(fill=tk.X, padx=16)
+    graph_canvas = tk.Canvas(graph_outer, height=140, bg=GRAPH_BG,
                              highlightthickness=0, bd=0)
     graph_canvas.pack(fill=tk.X, padx=1, pady=1)
 
     # Labels under graph
-    graph_labels = tk.Frame(root, bg=BG)
+    graph_labels = tk.Frame(normal_frame, bg=BG)
     graph_labels.pack(fill=tk.X, padx=16)
     tk.Label(graph_labels, text="60 seconds", font=("Segoe UI", 9),
              fg=FG_DIM, bg=BG).pack(side=tk.LEFT)
     tk.Label(graph_labels, text="0", font=("Segoe UI", 9),
              fg=FG_DIM, bg=BG).pack(side=tk.RIGHT)
 
-    # --- Memory composition subtitle ------------------------------
-    tk.Label(root, text="Memory composition", font=("Segoe UI", 10),
-             fg=FG_DIM, bg=BG).pack(anchor="w", padx=16, pady=(10, 2))
+    # --- "Memory composition" subtitle ------------------------------
+    tk.Label(normal_frame, text="Memory composition",
+             font=("Segoe UI", 10), fg=FG_DIM, bg=BG).pack(
+        anchor="w", padx=16, pady=(10, 2))
 
-    # --- Composition bar (outlined) -------------------------------
-    comp_bar_frame = tk.Frame(root, bg=BAR_OUTLINE, bd=1, relief="solid")
-    comp_bar_frame.pack(fill=tk.X, padx=16)
-    comp_canvas = tk.Canvas(comp_bar_frame, height=22, bg=COMP_FREE,
+    # --- Composition bar with border --------------------------------
+    comp_outer = tk.Frame(normal_frame, bg=BAR_BORDER, bd=1, relief="solid")
+    comp_outer.pack(fill=tk.X, padx=16)
+    comp_canvas = tk.Canvas(comp_outer, height=22, bg=COMP_FREE,
                             highlightthickness=0, bd=0)
     comp_canvas.pack(fill=tk.X, padx=1, pady=1)
 
-    # --- Data grid (two columns) ----------------------------------
+    # == DATA GRID (always visible, also shown in pin mode) ===========
     data_frame = tk.Frame(root, bg=BG)
-    data_frame.pack(fill=tk.X, padx=16, pady=(12, 16))
+    data_frame.pack(fill=tk.BOTH, padx=16, pady=(12, 8))
 
     val_lbls: dict[str, tk.Label] = {}
 
     def _make_data_cell(parent, row, col, label_text):
-        """Create a label + value cell in the grid."""
         f = tk.Frame(parent, bg=BG)
         f.grid(row=row, column=col, sticky="w", padx=(0, 30), pady=2)
         tk.Label(f, text=label_text, font=("Segoe UI", 9),
                  fg=FG_DIM, bg=BG, anchor="w").pack(anchor="w")
         val = tk.Label(f, text="--", font=("Segoe UI", 12, "bold"),
-                       fg=FG_VAL, bg=BG, anchor="w")
+                       fg=FG, bg=BG, anchor="w")
         val.pack(anchor="w")
         return val
 
-    val_lbls["In use"] = _make_data_cell(data_frame, 0, 0, "In use (Compressed)")
+    val_lbls["In use"] = _make_data_cell(data_frame, 0, 0,
+                                          "In use (Compressed)")
     val_lbls["Available"] = _make_data_cell(data_frame, 0, 1, "Available")
     val_lbls["Committed"] = _make_data_cell(data_frame, 1, 0, "Committed")
     val_lbls["Cached"] = _make_data_cell(data_frame, 1, 1, "Cached")
     val_lbls["Paged pool"] = _make_data_cell(data_frame, 2, 0, "Paged pool")
-    val_lbls["Non-paged pool"] = _make_data_cell(data_frame, 2, 1, "Non-paged pool")
+    val_lbls["Non-paged pool"] = _make_data_cell(data_frame, 2, 1,
+                                                  "Non-paged pool")
 
-    # --- History buffer -------------------------------------------
-    history: list[float] = [0.0] * 60
+    # == PIN BUTTON (in data_frame header area) =======================
+    pin_frame = tk.Frame(data_frame, bg=BG)
+    pin_frame.grid(row=0, column=2, rowspan=2, sticky="ne", padx=(10, 0))
+    pin_btn = tk.Label(pin_frame, text="\U0001F4CC", font=("Segoe UI", 14),
+                       fg=FG_DIM, bg=BG, cursor="hand2")
+    pin_btn.pack(anchor="ne")
+    pin_btn.bind("<Button-1>", lambda e: _toggle_pin())
 
-    # --- Close handler --------------------------------------------
-    def _on_close() -> None:
+    # -- Pin / unpin logic -------------------------------------------
+    def _toggle_pin():
+        if state["pinned"]:
+            _unpin()
+        else:
+            _pin()
+
+    def _pin():
+        state["pinned"] = True
+        # Hide normal content
+        normal_frame.pack_forget()
+        # Remove title bar, always on top
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        root.configure(bg=BG)
+        # Bind dragging on the data_frame
+        data_frame.bind("<Button-1>", _drag_start)
+        data_frame.bind("<B1-Motion>", _drag_motion)
+        for child in data_frame.winfo_children():
+            child.bind("<Button-1>", _drag_start)
+            child.bind("<B1-Motion>", _drag_motion)
+        pin_btn.config(fg="#4da6ff")
+        # Compact size
+        root.after(50, lambda: root.geometry(""))
+
+    def _unpin():
+        state["pinned"] = False
+        root.overrideredirect(False)
+        root.attributes("-topmost", False)
+        root.geometry("500x520")
+        # Unbind dragging
+        data_frame.unbind("<Button-1>")
+        data_frame.unbind("<B1-Motion>")
+        for child in data_frame.winfo_children():
+            child.unbind("<Button-1>")
+            child.unbind("<B1-Motion>")
+        pin_btn.config(fg=FG_DIM)
+        # Show normal content
+        normal_frame.pack(fill=tk.BOTH, expand=True, before=data_frame)
+
+    def _drag_start(event):
+        state["drag_x"] = event.x_root
+        state["drag_y"] = event.y_root
+
+    def _drag_motion(event):
+        dx = event.x_root - state["drag_x"]
+        dy = event.y_root - state["drag_y"]
+        x = root.winfo_x() + dx
+        y = root.winfo_y() + dy
+        root.geometry(f"+{x}+{y}")
+        state["drag_x"] = event.x_root
+        state["drag_y"] = event.y_root
+
+    # -- Close handler -----------------------------------------------
+    def _on_close():
         global _memory_panel_window
         _memory_panel_window = None
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", _on_close)
+    root.geometry("500x520")
     root.attributes("-topmost", True)
     root.after(500, lambda: root.attributes("-topmost", False))
 
-    # --- Draw graph -----------------------------------------------
+    # -- Draw graph --------------------------------------------------
     def _draw_graph():
         graph_canvas.delete("all")
         w = graph_canvas.winfo_width()
         h = graph_canvas.winfo_height()
         if w < 2:
-            w = 450
-            h = 140
+            w, h = 460, 140
 
-        # Grid lines (horizontal at 25, 50, 75, 100%)
+        # Grid lines at 25 / 50 / 75 / 100 %
         for i in range(1, 5):
             y = h - h * i / 4
             graph_canvas.create_line(0, y, w, y, fill=GRAPH_GRID, dash=(2, 4))
 
-        # Build polygon points
-        points: list[tuple[float, float]] = []
-        for i, val in enumerate(history):
-            x = w * i / max(len(history) - 1, 1)
+        pts = list(_history)
+        if len(pts) < 2:
+            return
+
+        # Build smooth points
+        coords: list[tuple[float, float]] = []
+        for i, val in enumerate(pts):
+            x = w * i / (len(pts) - 1)
             y = h - h * min(val, 100) / 100
-            points.append((x, y))
+            coords.append((x, y))
 
-        if len(points) >= 2:
-            # Filled area
-            poly = [(0, h)] + points + [(w, h)]
-            flat = []
-            for p in poly:
-                flat.extend(p)
-            graph_canvas.create_polygon(flat, fill=GRAPH_LINE, outline="",
-                                        stipple="gray25")
-            # Line on top
-            line_flat = []
-            for p in points:
-                line_flat.extend(p)
-            graph_canvas.create_line(line_flat, fill=GRAPH_LINE, width=2)
+        # Solid filled area (no stipple)
+        poly = [(0, h)] + coords + [(w, h)]
+        flat = []
+        for p in poly:
+            flat.extend(p)
+        graph_canvas.create_polygon(flat, fill=GRAPH_LINE, outline="")
 
-    # --- Draw composition bar -------------------------------------
-    def _draw_comp_bar(d: MemInfo):
+        # Line on top
+        lflat = []
+        for p in coords:
+            lflat.extend(p)
+        graph_canvas.create_line(lflat, fill=GRAPH_LINE, width=2, smooth=True)
+
+    # -- Draw composition bar ----------------------------------------
+    def _draw_comp(d: MemInfo):
         comp_canvas.delete("all")
         w = comp_canvas.winfo_width()
         h = comp_canvas.winfo_height()
         if w < 2:
-            w = 450
-            h = 22
-
+            w, h = 460, 22
         total = d["total"]
         if total == 0:
             return
-
         inuse_w = w * d["in_use"] / total
         cached_w = w * d["cached"] / total
-
-        # In use segment
         comp_canvas.create_rectangle(0, 0, max(inuse_w, 1), h,
                                      fill=COMP_INUSE, outline="")
-        # Cached segment
         comp_canvas.create_rectangle(inuse_w, 0, inuse_w + cached_w, h,
                                      fill=COMP_CACHED, outline="")
-        # Rest is free (already COMP_FREE background)
-
-        # Thin vertical separator lines
-        comp_canvas.create_line(inuse_w, 0, inuse_w, h, fill="#444444", width=1)
+        comp_canvas.create_line(inuse_w, 0, inuse_w, h,
+                                fill="#444444", width=1)
         comp_canvas.create_line(inuse_w + cached_w, 0, inuse_w + cached_w, h,
                                 fill="#444444", width=1)
 
-    # --- Update loop ----------------------------------------------
+    # -- Update loop -------------------------------------------------
     def _update():
         try:
             d = collect()
-            pct = d["percent"]
-            total_gb[0] = d["total"] / (1024 ** 3)
-            total_lbl.config(text=f"{total_gb[0]:.0f} GB")
-
-            # History
-            history.append(pct)
-            if len(history) > 60:
-                history.pop(0)
+            total_gb = d["total"] / (1024 ** 3)
+            total_lbl.config(text=f"{total_gb:.0f} GB")
 
             _draw_graph()
-            _draw_comp_bar(d)
+            _draw_comp(d)
 
-            # Data values
             inuse_val = _fmt(d["in_use"])
             if d["compressed"]:
                 inuse_val += " (" + _fmt(d["compressed"]) + ")"
@@ -706,7 +766,6 @@ def _open_memory_panel() -> None:
             val_lbls["Cached"].config(text=_fmt(d["cached"]))
             val_lbls["Paged pool"].config(text=_fmt(d["paged_pool"]))
             val_lbls["Non-paged pool"].config(text=_fmt(d["nonpaged_pool"]))
-
         except Exception:
             pass
         try:
@@ -775,6 +834,9 @@ def main() -> None:
                     d = collect()
                     icon.icon = make_icon(d["percent"])
                     icon.title = d["tip"]
+                    _history.append(d["percent"])
+                    if len(_history) > 60:
+                        _history.pop(0)
             except Exception:
                 pass
             time.sleep(1)
