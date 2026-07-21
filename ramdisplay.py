@@ -225,7 +225,7 @@ def _usage_color(percent: float) -> tuple[int, int, int]:
     """
     g = (76, 175, 80)   # green
     a = (255, 193, 7)   # amber
-    r = (244, 67, 54)   # red
+    r = (220, 30, 30)   # red (more saturated)
     if percent <= 50:
         t = max(0.0, min(1.0, percent / 50.0))
         return (int(g[0] + (a[0] - g[0]) * t),
