@@ -4,11 +4,12 @@ RAMDisplay -- System Tray Memory Monitor for Windows 10/11
 Hover over the tray icon to see real-time memory metrics
 (updated every second) matching Task Manager -> Performance -> Memory.
 
-Right-click for: About, Auto-start, Check for Updates, Exit.
+Left-click: Memory usage panel (Win11 Task Manager style)
+Right-click: About, Auto-start, Check for Updates, Exit.
 
 Usage:
-    python ramdisplay.py        (with console window)
-    pythonw ramdisplay.py       (no console, background)
+    python ramdisplay.py
+    pythonw ramdisplay.py       (no console)
 """
 
 from __future__ import annotations
@@ -25,7 +26,6 @@ import winreg
 
 import pystray
 from PIL import Image, ImageDraw, ImageFont
-
 
 # -----------------------------------------------------------------------
 #  App metadata
@@ -99,7 +99,6 @@ def _get_mem_status() -> MEMORYSTATUSEX | None:
 # -----------------------------------------------------------------------
 
 def _fmt(b: float | int | None, dec: int = 1) -> str:
-    """Format bytes into a human-friendly string (B / KB / MB / GB / TB)."""
     if b is None:
         return "N/A"
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -114,7 +113,6 @@ def _fmt(b: float | int | None, dec: int = 1) -> str:
 # -----------------------------------------------------------------------
 
 def _get_counter(path: str) -> int | None:
-    """Query a single PDH performance counter; return integer value or None."""
     try:
         import win32pdh
         q = win32pdh.OpenQuery()
@@ -128,10 +126,6 @@ def _get_counter(path: str) -> int | None:
 
 
 def _get_cached_bytes() -> int | None:
-    """
-    Return the total standby cache size (matching Task Manager's Cached value)
-    by summing the three standby priority classes.
-    """
     parts = [
         _get_counter(r"\Memory\Standby Cache Reserve Bytes"),
         _get_counter(r"\Memory\Standby Cache Normal Priority Bytes"),
@@ -142,25 +136,47 @@ def _get_cached_bytes() -> int | None:
     return sum(parts)
 
 
-def collect() -> tuple[float, str]:
-    """
-    Query system memory metrics and return (usage_percent, tooltip_text).
+# -----------------------------------------------------------------------
+#  Memory data: returns a dict with all metrics
+# -----------------------------------------------------------------------
 
-    Tooltip matches Task Manager's Memory view:
-      - In use (Compressed)
-      - Available
-      - Committed (Current / Limit)
-      - Cached
-      - Paged pool / Non-paged pool
+MemInfo = dict
+
+
+def collect() -> MemInfo:
     """
+    Collect all memory metrics.
+    Returns a dict with keys:
+      percent, in_use, compressed, available, total,
+      commit_total, commit_limit, cached,
+      paged_pool, nonpaged_pool, tip
+    """
+    info: MemInfo = {
+        "percent": 0.0,
+        "in_use": 0,
+        "compressed": None,
+        "available": 0,
+        "total": 0,
+        "commit_total": 0,
+        "commit_limit": 0,
+        "cached": 0,
+        "paged_pool": 0,
+        "nonpaged_pool": 0,
+        "tip": "",
+    }
+
     perf = _get_perf_info()
     mem = _get_mem_status()
 
-    # -- Physical memory ------------------------------------------------
     if perf and perf.PageSize:
         ps = perf.PageSize
         total = perf.PhysicalTotal * ps
         avail = perf.PhysicalAvailable * ps
+        info["commit_total"] = perf.CommitTotal * ps
+        info["commit_limit"] = perf.CommitLimit * ps
+        info["cached"] = perf.SystemCache * ps
+        info["paged_pool"] = perf.KernelPaged * ps
+        info["nonpaged_pool"] = perf.KernelNonpaged * ps
     elif mem:
         total = mem.ullTotalPhys
         avail = mem.ullAvailPhys
@@ -168,56 +184,42 @@ def collect() -> tuple[float, str]:
         total = 0
         avail = 0
 
-    in_use = total - avail
-    percent = (in_use / total * 100.0) if total else 0.0
+    info["total"] = total
+    info["available"] = avail
+    info["in_use"] = total - avail
+    info["percent"] = (info["in_use"] / total * 100.0) if total else 0.0
+    info["compressed"] = _get_counter(r"\Memory\Compressed Memory Count")
 
-    # -- Build tooltip -------------------------------------------------
+    standby = _get_cached_bytes()
+    if standby is not None:
+        info["cached"] = standby
+
     lines: list[str] = []
-
-    # In use (+ compressed, if available)
-    use_line = f"In use: {_fmt(in_use)}"
-    compressed = _get_counter(r"\Memory\Compressed Memory Count")
-    if compressed is not None:
-        use_line += f"  (Compressed: {_fmt(compressed)})"
+    use_line = f"In use: {_fmt(info['in_use'])}"
+    if info["compressed"] is not None:
+        use_line += f"  (Compressed: {_fmt(info['compressed'])})"
     lines.append(use_line)
-
-    # Available
-    lines.append(f"Available: {_fmt(avail)}")
-
-    # Committed
-    if perf and perf.PageSize:
-        ct = perf.CommitTotal * perf.PageSize
-        cl = perf.CommitLimit * perf.PageSize
-        lines.append(f"Committed: {_fmt(ct)} / {_fmt(cl)}")
-
-    # Cached  (prefer standby-cache sum, fall back to SystemCache)
-    cached = _get_cached_bytes()
-    if cached is not None:
-        lines.append(f"Cached: {_fmt(cached)}")
-    elif perf and perf.PageSize:
-        lines.append(f"Cached: {_fmt(perf.SystemCache * perf.PageSize)} (system cache)")
-
-    # Paged pool / Non-paged pool
-    if perf and perf.PageSize:
-        lines.append(
-            f"Paged pool: {_fmt(perf.KernelPaged * perf.PageSize)}  "
-            f"Non-paged pool: {_fmt(perf.KernelNonpaged * perf.PageSize)}"
-        )
-
-    return percent, "\n".join(lines)
+    lines.append(f"Available: {_fmt(info['available'])}")
+    if info["commit_total"]:
+        lines.append(f"Committed: {_fmt(info['commit_total'])} / {_fmt(info['commit_limit'])}")
+    if info["cached"]:
+        lines.append(f"Cached: {_fmt(info['cached'])}")
+    if info["paged_pool"]:
+        lines.append(f"Paged pool: {_fmt(info['paged_pool'])}  Non-paged pool: {_fmt(info['nonpaged_pool'])}")
+    info["tip"] = "\n".join(lines)
+    return info
 
 
 # -----------------------------------------------------------------------
-#  Tray icon drawing
+#  Tray icon drawing -- large centred number, solid background
 # -----------------------------------------------------------------------
 
 def make_icon(percent: float) -> Image.Image:
-    """Create a 64x64 RGBA tray icon colored by memory usage."""
+    """Create a 64x64 tray icon: just the percentage number, big & clear."""
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # Color gradient: green < 50%, amber < 80%, red >= 80%
     if percent < 50:
         color = (76, 175, 80)
     elif percent < 80:
@@ -225,30 +227,22 @@ def make_icon(percent: float) -> Image.Image:
     else:
         color = (244, 67, 54)
 
-    m = 4
-    draw.ellipse(
-        [m, m, size - m, size - m],
-        fill=color + (200,),
-        outline=color,
-        width=2,
+    draw.rounded_rectangle(
+        [1, 1, size - 2, size - 2], radius=10,
+        fill=color + (230,),
     )
-
-    # Draw usage percentage in the center
+    text = f"{int(percent)}%"
     try:
-        font = ImageFont.truetype("segoeui.ttf", 20)
+        font = ImageFont.truetype("segoeui.ttf", 30)
     except Exception:
         font = ImageFont.load_default()
 
-    text = f"{int(percent)}%"
     bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     draw.text(
         ((size - tw) / 2, (size - th) / 2),
-        text,
-        fill=(255, 255, 255, 255),
-        font=font,
+        text, fill=(255, 255, 255, 255), font=font,
     )
-
     return img
 
 
@@ -261,18 +255,12 @@ AUTOSTART_NAME = APP_NAME
 
 
 def _get_app_path() -> str:
-    """Get the command line to register for auto-start.
-
-    - Frozen exe: just the exe path.
-    - Script:    python.exe + script path.
-    """
     if getattr(sys, "frozen", False):
         return sys.executable
     return f'"{sys.executable}" "{os.path.abspath(__file__)}"'
 
 
 def is_autostart_enabled() -> bool:
-    """Check whether the auto-start registry entry exists and is current."""
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0, winreg.KEY_READ)
         value, _ = winreg.QueryValueEx(key, AUTOSTART_NAME)
@@ -283,10 +271,7 @@ def is_autostart_enabled() -> bool:
 
 
 def set_autostart(enabled: bool) -> None:
-    """Enable or disable auto-start via HKCU Run registry key."""
-    key = winreg.OpenKey(
-        winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0, winreg.KEY_SET_VALUE
-    )
+    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0, winreg.KEY_SET_VALUE)
     try:
         if enabled:
             winreg.SetValueEx(key, AUTOSTART_NAME, 0, winreg.REG_SZ, _get_app_path())
@@ -304,7 +289,6 @@ def set_autostart(enabled: bool) -> None:
 # -----------------------------------------------------------------------
 
 def _parse_version(v: str) -> tuple[int, ...]:
-    """Convert a dotted version string to a comparable tuple."""
     try:
         return tuple(int(x) for x in v.split("."))
     except (ValueError, AttributeError):
@@ -312,16 +296,12 @@ def _parse_version(v: str) -> tuple[int, ...]:
 
 
 def _get_latest_version() -> str | None:
-    """Fetch the latest release tag from GitHub. Returns None on failure."""
-    url = f"{GITHUB_URL}/releases/latest"
     api_url = "https://api.github.com/repos/JohnXu22786/RAMDisplay/releases/latest"
     try:
         req = urllib.request.Request(
             api_url,
-            headers={
-                "User-Agent": f"{APP_NAME}/{VERSION}",
-                "Accept": "application/vnd.github.v3+json",
-            },
+            headers={"User-Agent": f"{APP_NAME}/{VERSION}",
+                     "Accept": "application/vnd.github.v3+json"},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
@@ -332,13 +312,10 @@ def _get_latest_version() -> str | None:
 
 
 def check_for_updates() -> str | None:
-    """Check GitHub for a newer release. Returns the latest version or None."""
     latest = _get_latest_version()
     if latest is None:
         return None
-    current = _parse_version(VERSION)
-    remote = _parse_version(latest)
-    if remote > current:
+    if _parse_version(latest) > _parse_version(VERSION):
         return latest
     return None
 
@@ -347,62 +324,46 @@ def check_for_updates() -> str | None:
 #  Auto-update (download & self-replace)
 # -----------------------------------------------------------------------
 
-_stop_icon: pystray.Icon | None = None  # set by main() for background thread
+_stop_icon: pystray.Icon | None = None
 
 
 def _do_update_check() -> None:
-    """Background thread: check for update, ask user, download & replace."""
     global _stop_icon
     latest = check_for_updates()
     if latest is None:
-        _user32.MessageBoxW(
-            0, "You are up to date (v" + VERSION + ").",
-            APP_NAME + " - Update Check", 0,
-        )
+        _user32.MessageBoxW(0, "You are up to date (v" + VERSION + ").",
+                            APP_NAME + " - Update Check", 0)
         return
 
     rc = _user32.MessageBoxW(
         0,
         "A new version is available!\n\n"
-        "Current:  v" + VERSION + "\n"
-        "Latest:   v" + latest + "\n\n"
+        "Current:  v" + VERSION + "\nLatest:   v" + latest + "\n\n"
         "Download and install now?",
         APP_NAME + " - Update Available",
-        0x04 | 0x20 | 0x10000,  # MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND
+        0x04 | 0x20 | 0x10000,
     )
-    if rc != 6:  # IDYES
+    if rc != 6:
         return
 
-    # --- Download --------------------------------------------------
     if not getattr(sys, "frozen", False):
         _user32.MessageBoxW(
             0, "Auto-update only works with the .exe version.\n"
                "Please download manually from:\n" + GITHUB_URL + "/releases",
-            APP_NAME + " - Update", 0,
-        )
+            APP_NAME + " - Update", 0)
         return
 
     exe_name = APP_NAME + "-v" + latest + ".exe"
-    url = (GITHUB_URL + "/releases/download/v" + latest + "/" + exe_name)
+    url = GITHUB_URL + "/releases/download/v" + latest + "/" + exe_name
     temp_exe = os.path.join(os.environ["TEMP"], exe_name)
-
     try:
-        # Notify: downloading
-        _user32.MessageBoxW(
-            0, "Downloading " + exe_name + " ...\n\n"
-               "The app will restart automatically when done.",
-            APP_NAME + " - Downloading", 0,
-        )
-
+        _user32.MessageBoxW(0, "Downloading " + exe_name + " ...\n\n"
+                            "The app will restart automatically when done.",
+                            APP_NAME + " - Downloading", 0)
         urllib.request.urlretrieve(url, temp_exe)
-
-        # Verify the downloaded file exists
         if not os.path.isfile(temp_exe):
             raise RuntimeError("Download failed - file not found")
-
         current_exe = sys.executable
-
-        # Create update batch script
         bat_path = os.path.join(os.environ["TEMP"], "update_ramdisplay.bat")
         with open(bat_path, "w", encoding="ascii") as f:
             f.write(
@@ -419,17 +380,12 @@ def _do_update_check() -> None:
                 'start "" "' + current_exe + '"\r\n'
                 "del \"%~f0\"\r\n"
             )
-
-        # Launch the updater (hidden) and exit
-        ctypes.windll.kernel32.WinExec(bat_path, 0)  # SW_HIDE
+        ctypes.windll.kernel32.WinExec(bat_path, 0)
         if _stop_icon:
-            _stop_icon.stop()  # triggers exit
-
+            _stop_icon.stop()
     except Exception as e:
-        _user32.MessageBoxW(
-            0, "Update failed:\n" + str(e),
-            APP_NAME + " - Error", 0x10,  # MB_ICONERROR
-        )
+        _user32.MessageBoxW(0, "Update failed:\n" + str(e),
+                            APP_NAME + " - Error", 0x10)
 
 
 # -----------------------------------------------------------------------
@@ -437,7 +393,6 @@ def _do_update_check() -> None:
 # -----------------------------------------------------------------------
 
 def show_about() -> None:
-    """Display About dialog (non-blocking, own thread)."""
     threading.Thread(
         target=_user32.MessageBoxW,
         args=(
@@ -458,13 +413,145 @@ def show_about() -> None:
 
 
 # -----------------------------------------------------------------------
+#  Memory usage panel (tkinter) -- Win11 Task Manager style
+# -----------------------------------------------------------------------
+
+_memory_panel_window = None
+
+
+def _open_memory_panel() -> None:
+    global _memory_panel_window
+
+    if _memory_panel_window is not None:
+        try:
+            _memory_panel_window.lift()
+            _memory_panel_window.focus_force()
+            return
+        except Exception:
+            _memory_panel_window = None
+
+    try:
+        import tkinter as tk
+    except ImportError:
+        show_about()
+        return
+
+    # -- Build window ------------------------------------------------
+    root = tk.Tk()
+    _memory_panel_window = root
+    root.title("Memory")
+    root.geometry("380x500")
+    root.resizable(False, False)
+    root.configure(bg="#1e1e1e")
+
+    def _on_close() -> None:
+        global _memory_panel_window
+        _memory_panel_window = None
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", _on_close)
+    root.attributes("-topmost", True)
+    root.after(500, lambda: root.attributes("-topmost", False))
+
+    # -- Usage bar ---------------------------------------------------
+    bar_frame = tk.Frame(root, bg="#1e1e1e")
+    bar_frame.pack(fill=tk.X, padx=16, pady=(16, 0))
+    bar_canvas = tk.Canvas(bar_frame, height=24, bg="#2d2d2d",
+                           highlightthickness=0, bd=0)
+    bar_canvas.pack(fill=tk.X)
+    bar_handle = bar_canvas.create_rectangle(0, 0, 0, 24, fill="#4caf50", width=0)
+
+    # -- Big percentage ----------------------------------------------
+    pct_label = tk.Label(root, text="--%", font=("Segoe UI", 40, "bold"),
+                         fg="white", bg="#1e1e1e")
+    pct_label.pack(pady=(4, 0))
+
+    # -- In-use / Total ----------------------------------------------
+    usage_label = tk.Label(root, text="-- / -- GB",
+                           font=("Segoe UI", 11), fg="#cccccc", bg="#1e1e1e")
+    usage_label.pack()
+
+    # -- Separator ---------------------------------------------------
+    sep = tk.Frame(root, height=1, bg="#3d3d3d")
+    sep.pack(fill=tk.X, padx=16, pady=12)
+
+    # -- Details grid ------------------------------------------------
+    details = tk.Frame(root, bg="#1e1e1e")
+    details.pack(fill=tk.BOTH, padx=20)
+
+    rows = [
+        ("In use (Compressed)", ""),
+        ("Available", ""),
+        ("Committed", ""),
+        ("Cached", ""),
+        ("Paged pool", ""),
+        ("Non-paged pool", ""),
+        ("Total", ""),
+    ]
+    val_labels: list[tk.Label] = []
+
+    for i, (label, _) in enumerate(rows):
+        lbl = tk.Label(details, text=label, font=("Segoe UI", 10),
+                       fg="#999999", bg="#1e1e1e", anchor="w")
+        lbl.grid(row=i, column=0, sticky="w", pady=3)
+        val = tk.Label(details, text="...", font=("Segoe UI", 10, "bold"),
+                       fg="white", bg="#1e1e1e", anchor="e")
+        val.grid(row=i, column=1, sticky="e", pady=3, padx=(20, 0))
+        val_labels.append(val)
+
+    # -- Update loop -------------------------------------------------
+    def _update_panel() -> None:
+        try:
+            d = collect()
+            pct = d["percent"]
+
+            bar_w = int(bar_canvas.winfo_width() * pct / 100)
+            if pct < 50:
+                bar_fill = "#4caf50"
+            elif pct < 80:
+                bar_fill = "#ffc107"
+            else:
+                bar_fill = "#f44336"
+            bar_canvas.itemconfig(bar_handle, fill=bar_fill)
+            bar_canvas.coords(bar_handle, 0, 0, max(bar_w, 1), 24)
+
+            pct_label.config(text=f"{int(pct)}%")
+            usage_label.config(
+                text=f"{d['in_use'] / 1024**3:.1f} / {d['total'] / 1024**3:.1f} GB"
+            )
+
+            vals = [
+                _fmt(d["in_use"]) + ("  (" + _fmt(d["compressed"]) + ")" if d["compressed"] else ""),
+                _fmt(d["available"]),
+                _fmt(d["commit_total"]) + " / " + _fmt(d["commit_limit"]) if d["commit_total"] else "N/A",
+                _fmt(d["cached"]),
+                _fmt(d["paged_pool"]),
+                _fmt(d["nonpaged_pool"]),
+                _fmt(d["total"]),
+            ]
+            for i, v in enumerate(vals):
+                val_labels[i].config(text=v)
+        except Exception:
+            pass
+        try:
+            root.after(1000, _update_panel)
+        except Exception:
+            pass
+
+    _update_panel()
+    root.mainloop()
+
+
+# -----------------------------------------------------------------------
 #  Entry point
 # -----------------------------------------------------------------------
 
 def main() -> None:
     """Create the tray icon, build the menu, start the updater thread."""
 
-    # -- Menu actions -----------------------------------------------
+    def _on_open_panel(icon: pystray.Icon) -> None:
+        threading.Thread(target=_open_memory_panel, daemon=True).start()
+
     def _on_about(icon: pystray.Icon) -> None:
         show_about()
 
@@ -480,15 +567,14 @@ def main() -> None:
     def _on_exit(icon: pystray.Icon) -> None:
         icon.stop()
 
-    # -- Build menu -------------------------------------------------
+    # "default=True" -> triggered by left-click on the tray icon
     menu = pystray.Menu(
-        pystray.MenuItem("About", _on_about, default=True),
+        pystray.MenuItem("Memory Panel", _on_open_panel, default=True),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem(
-            "Auto-start with Windows",
-            _on_autostart,
-            checked=lambda item: is_autostart_enabled(),
-        ),
+        pystray.MenuItem("About", _on_about),
+        pystray.MenuItem("Auto-start with Windows",
+                         _on_autostart,
+                         checked=lambda item: is_autostart_enabled()),
         pystray.MenuItem("Check for Updates", _on_check_updates),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Exit", _on_exit),
@@ -496,15 +582,13 @@ def main() -> None:
 
     icon = pystray.Icon(APP_NAME, make_icon(0), APP_NAME + " v" + VERSION, menu)
 
-    # -- Background updater thread ----------------------------------
-    # Updates icon graphic and tooltip text every second.
-
+    # -- Background updater thread ---------------------------------
     def updater() -> None:
         while True:
             try:
-                pct, tip = collect()
-                icon.icon = make_icon(pct)
-                icon.title = tip
+                d = collect()
+                icon.icon = make_icon(d["percent"])
+                icon.title = d["tip"]
             except Exception:
                 pass
             time.sleep(1)
@@ -512,7 +596,6 @@ def main() -> None:
     threading.Thread(target=updater, daemon=True).start()
 
     # -- Non-blocking startup update check -------------------------
-    # Runs once in background; sets tooltip if new version found.
     def _startup_check() -> None:
         try:
             latest = check_for_updates()
