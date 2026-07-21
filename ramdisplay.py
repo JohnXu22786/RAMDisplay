@@ -219,22 +219,38 @@ def collect() -> MemInfo:
 
 def _usage_color(percent: float) -> tuple[int, int, int]:
     """
-    Return an RGB tuple smoothly interpolated from green to amber to red.
-      0%         50%        100%
-    green ---- amber ---- red
+    Piecewise linear gradient — hand-picked keypoints.
+
+       0% ──── 50% ──── 80% ──── 100%
+      green   amber   orange     red
     """
-    g = (76, 175, 80)   # green
-    a = (255, 193, 7)   # amber
-    r = (220, 30, 30)   # red (more saturated)
-    if percent <= 50:
-        t = max(0.0, min(1.0, percent / 50.0))
+    p = max(0.0, min(100.0, percent))
+
+    if p <= 50:
+        # green ── amber
+        g = (76, 175, 80)
+        a = (255, 193, 7)
+        t = p / 50.0
         return (int(g[0] + (a[0] - g[0]) * t),
                 int(g[1] + (a[1] - g[1]) * t),
                 int(g[2] + (a[2] - g[2]) * t))
-    t = max(0.0, min(1.0, (percent - 50) / 50.0))
-    return (int(a[0] + (r[0] - a[0]) * t),
-            int(a[1] + (r[1] - a[1]) * t),
-            int(a[2] + (r[2] - a[2]) * t))
+
+    if p <= 80:
+        # amber ── orange-red
+        a = (255, 193, 7)
+        o = (235, 100, 25)
+        t = (p - 50) / 30.0
+        return (int(a[0] + (o[0] - a[0]) * t),
+                int(a[1] + (o[1] - a[1]) * t),
+                int(a[2] + (o[2] - a[2]) * t))
+
+    # orange-red ── pure red
+    o = (235, 100, 25)
+    r = (220, 30, 30)
+    t = (p - 80) / 20.0
+    return (int(o[0] + (r[0] - o[0]) * t),
+            int(o[1] + (r[1] - o[1]) * t),
+            int(o[2] + (r[2] - o[2]) * t))
 
 
 # -----------------------------------------------------------------------
