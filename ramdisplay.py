@@ -218,7 +218,7 @@ def collect() -> MemInfo:
 # -----------------------------------------------------------------------
 
 def make_icon(percent: float) -> Image.Image:
-    """Coloured circle outline + large centred number, no fill."""
+    """Create a 64x64 tray icon: circle with centred number."""
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -226,23 +226,23 @@ def make_icon(percent: float) -> Image.Image:
     if percent < 50:
         color = (76, 175, 80)      # green
     elif percent < 80:
-        color = (255, 193, 7)      # amber
+        color = (200, 160, 50)     # amber
     else:
-        color = (244, 67, 54)      # red
+        color = (180, 55, 55)      # soft red
 
-    # Circle outline only (no background fill)
-    m = 3
+    # Circle
+    m = 2
     draw.ellipse(
         [m, m, size - m, size - m],
-        fill=None,
+        fill=color + (220,),
         outline=color,
-        width=4,
+        width=2,
     )
 
-    # Large number matching the colour
+    # Large centred number
     text = f"{int(percent)}"
     try:
-        font = ImageFont.truetype("segoeui.ttf", 32)
+        font = ImageFont.truetype("segoeui.ttf", 28)
     except Exception:
         font = ImageFont.load_default()
 
@@ -251,7 +251,7 @@ def make_icon(percent: float) -> Image.Image:
     text_cy = (bbox[1] + bbox[3]) / 2
     draw.text(
         (size / 2 - text_cx, size / 2 - text_cy),
-        text, fill=color, font=font,
+        text, fill=(255, 255, 255, 255), font=font,
     )
     return img
 
@@ -633,15 +633,12 @@ def _open_memory_panel() -> None:
 
     def _pin():
         state["pinned"] = True
+        # Hide normal content
         normal_frame.pack_forget()
-        data_frame.pack_forget()
-
-        # Outline colour behind the data frame = border
-        root.configure(bg="#3a9adb")
-        data_frame.pack(fill=tk.BOTH, padx=2, pady=2, before=normal_frame)
-
+        # Remove title bar, always on top
         root.overrideredirect(True)
         root.attributes("-topmost", True)
+        root.configure(bg=BG)
         # Bind dragging on the data_frame
         data_frame.bind("<Button-1>", _drag_start)
         data_frame.bind("<B1-Motion>", _drag_motion)
@@ -649,21 +646,16 @@ def _open_memory_panel() -> None:
             child.bind("<Button-1>", _drag_start)
             child.bind("<B1-Motion>", _drag_motion)
         pin_btn.config(fg="#4da6ff")
+        # Compact size
         root.after(50, lambda: root.geometry(""))
 
     def _unpin():
         state["pinned"] = False
-
-        # Save current position before mode switch
-        px = root.winfo_x()
-        py = root.winfo_y()
-
-        data_frame.pack_forget()
         root.overrideredirect(False)
-        root.configure(bg=BG)
-        root.geometry(f"500x520+{px}+{py}")
+        root.geometry("500x520")
         root.update_idletasks()
-
+        # Ensure the window stays fully on-screen
+        _ensure_on_screen()
         root.attributes("-topmost", False)
         # Unbind dragging
         data_frame.unbind("<Button-1>")
@@ -674,29 +666,26 @@ def _open_memory_panel() -> None:
         pin_btn.config(fg=FG_DIM)
         # Show normal content
         normal_frame.pack(fill=tk.BOTH, expand=True, before=data_frame)
-        data_frame.pack(fill=tk.BOTH, padx=16, pady=(12, 8))
 
-        # Delayed clamp — wait for window decorations to settle
-        def _clamp():
-            root.update_idletasks()
-            x = root.winfo_x()
-            y = root.winfo_y()
-            w = root.winfo_width()
-            h = root.winfo_height()
-            sw = root.winfo_screenwidth()
-            sh = root.winfo_screenheight()
-            margin = 16
-            if x + w > sw:
-                x = sw - w - margin
-            if y + h > sh:
-                y = sh - h - margin
-            if x < margin:
-                x = margin
-            if y < margin:
-                y = margin
-            root.geometry(f"+{x}+{y}")
-
-        root.after(150, _clamp)
+    def _ensure_on_screen():
+        """Clamp window position so it is fully visible."""
+        root.update_idletasks()
+        x = root.winfo_x()
+        y = root.winfo_y()
+        w = root.winfo_width()
+        h = root.winfo_height()
+        sw = root.winfo_screenwidth()
+        sh = root.winfo_screenheight()
+        margin = 8
+        if x + w > sw:
+            x = sw - w - margin
+        if y + h > sh:
+            y = sh - h - margin
+        if x < margin:
+            x = margin
+        if y < margin:
+            y = margin
+        root.geometry(f"+{x}+{y}")
 
     def _drag_start(event):
         state["drag_x"] = event.x_root
