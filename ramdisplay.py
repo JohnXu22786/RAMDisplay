@@ -731,12 +731,15 @@ def _open_memory_panel() -> None:
     root.after(500, lambda: root.attributes("-topmost", False))
 
     # -- Draw graph --------------------------------------------------
-    def _draw_graph():
+    def _draw_graph(pct: float):
         graph_canvas.delete("all")
         w = graph_canvas.winfo_width()
         h = graph_canvas.winfo_height()
         if w < 2:
             w, h = 460, 140
+
+        col = _usage_color(pct)
+        hex_col = f"#{col[0]:02x}{col[1]:02x}{col[2]:02x}"
 
         # Grid lines at 25 / 50 / 75 / 100 %
         for i in range(1, 5):
@@ -759,13 +762,13 @@ def _open_memory_panel() -> None:
         flat = []
         for p in poly:
             flat.extend(p)
-        graph_canvas.create_polygon(flat, fill=GRAPH_LINE, outline="")
+        graph_canvas.create_polygon(flat, fill=hex_col, outline="")
 
         # Line on top
         lflat = []
         for p in coords:
             lflat.extend(p)
-        graph_canvas.create_line(lflat, fill=GRAPH_LINE, width=2, smooth=True)
+        graph_canvas.create_line(lflat, fill=hex_col, width=2, smooth=True)
 
     # -- Draw composition bar ----------------------------------------
     def _draw_comp(d: MemInfo):
@@ -779,8 +782,10 @@ def _open_memory_panel() -> None:
             return
         inuse_w = w * d["in_use"] / total
         cached_w = w * d["cached"] / total
+        inuse_col = _usage_color(d["percent"])
+        hex_inuse = f"#{inuse_col[0]:02x}{inuse_col[1]:02x}{inuse_col[2]:02x}"
         comp_canvas.create_rectangle(0, 0, max(inuse_w, 1), h,
-                                     fill=COMP_INUSE, outline="")
+                                     fill=hex_inuse, outline="")
         comp_canvas.create_rectangle(inuse_w, 0, inuse_w + cached_w, h,
                                      fill=COMP_CACHED, outline="")
         comp_canvas.create_line(inuse_w, 0, inuse_w, h,
@@ -792,10 +797,11 @@ def _open_memory_panel() -> None:
     def _update():
         try:
             d = collect()
+            pct = d["percent"]
             total_gb = d["total"] / (1024 ** 3)
             total_lbl.config(text=f"{total_gb:.0f} GB")
 
-            _draw_graph()
+            _draw_graph(pct)
             _draw_comp(d)
 
             inuse_val = _fmt(d["in_use"])
