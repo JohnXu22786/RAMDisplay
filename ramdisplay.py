@@ -214,6 +214,30 @@ def collect() -> MemInfo:
 
 
 # -----------------------------------------------------------------------
+#  Colour gradient -- smooth transition green -> amber -> red
+# -----------------------------------------------------------------------
+
+def _usage_color(percent: float) -> tuple[int, int, int]:
+    """
+    Return an RGB tuple smoothly interpolated from green to amber to red.
+      0%         50%        100%
+    green ---- amber ---- red
+    """
+    g = (76, 175, 80)   # green
+    a = (255, 193, 7)   # amber
+    r = (244, 67, 54)   # red
+    if percent <= 50:
+        t = max(0.0, min(1.0, percent / 50.0))
+        return (int(g[0] + (a[0] - g[0]) * t),
+                int(g[1] + (a[1] - g[1]) * t),
+                int(g[2] + (a[2] - g[2]) * t))
+    t = max(0.0, min(1.0, (percent - 50) / 50.0))
+    return (int(a[0] + (r[0] - a[0]) * t),
+            int(a[1] + (r[1] - a[1]) * t),
+            int(a[2] + (r[2] - a[2]) * t))
+
+
+# -----------------------------------------------------------------------
 #  Tray icon drawing -- large centred number, solid background
 # -----------------------------------------------------------------------
 
@@ -223,12 +247,7 @@ def make_icon(percent: float) -> Image.Image:
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    if percent < 50:
-        color = (76, 175, 80)      # green
-    elif percent < 80:
-        color = (255, 193, 7)      # amber
-    else:
-        color = (244, 67, 54)      # red
+    color = _usage_color(percent)
 
     # Circle outline only (no background fill)
     m = 3
