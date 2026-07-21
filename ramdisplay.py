@@ -219,16 +219,22 @@ def collect() -> MemInfo:
 
 def _usage_color(percent: float) -> tuple[int, int, int]:
     """
-    Simple linear gradient from green (0%) to red (100%).
+    Return an RGB tuple smoothly interpolated from green to amber to red.
+      0%         50%        100%
+    green ---- amber ---- red
     """
     g = (76, 175, 80)   # green
-    r = (220, 30, 30)   # red
-    t = max(0.0, min(1.0, percent / 100.0))
-    return (
-        int(g[0] + (r[0] - g[0]) * t),
-        int(g[1] + (r[1] - g[1]) * t),
-        int(g[2] + (r[2] - g[2]) * t),
-    )
+    a = (255, 193, 7)   # amber
+    r = (220, 30, 30)   # red (more saturated)
+    if percent <= 50:
+        t = max(0.0, min(1.0, percent / 50.0))
+        return (int(g[0] + (a[0] - g[0]) * t),
+                int(g[1] + (a[1] - g[1]) * t),
+                int(g[2] + (a[2] - g[2]) * t))
+    t = max(0.0, min(1.0, (percent - 50) / 50.0))
+    return (int(a[0] + (r[0] - a[0]) * t),
+            int(a[1] + (r[1] - a[1]) * t),
+            int(a[2] + (r[2] - a[2]) * t))
 
 
 # -----------------------------------------------------------------------
