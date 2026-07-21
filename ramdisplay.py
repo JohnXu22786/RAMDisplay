@@ -651,37 +651,12 @@ def _open_memory_panel() -> None:
 
     def _unpin():
         state["pinned"] = False
-
-        # Save pin position BEFORE changing anything
-        px = root.winfo_x()
-        py = root.winfo_y()
-
-        # Estimate final window size (500x520 client + ~40px title bar)
-        new_w = 500
-        new_h = 520 + 40
-        margin = 16
-        sw = root.winfo_screenwidth()
-        sh = root.winfo_screenheight()
-
-        if px + new_w > sw:
-            px = sw - new_w - margin
-        if py + new_h > sh:
-            py = sh - new_h - margin
-        if px < margin:
-            px = margin
-        if py < margin:
-            py = margin
-
-        # Show normal content
-        data_frame.pack_forget()
-        normal_frame.pack(fill=tk.BOTH, expand=True, before=data_frame)
-        data_frame.pack(fill=tk.BOTH, padx=16, pady=(12, 8))
-        root.update_idletasks()
-
         root.overrideredirect(False)
-        root.geometry(f"500x520+{px}+{py}")
+        root.geometry("500x520")
+        root.update_idletasks()
+        # Ensure the window stays fully on-screen
+        _ensure_on_screen()
         root.attributes("-topmost", False)
-
         # Unbind dragging
         data_frame.unbind("<Button-1>")
         data_frame.unbind("<B1-Motion>")
@@ -689,6 +664,28 @@ def _open_memory_panel() -> None:
             child.unbind("<Button-1>")
             child.unbind("<B1-Motion>")
         pin_btn.config(fg=FG_DIM)
+        # Show normal content
+        normal_frame.pack(fill=tk.BOTH, expand=True, before=data_frame)
+
+    def _ensure_on_screen():
+        """Clamp window position so it is fully visible."""
+        root.update_idletasks()
+        x = root.winfo_x()
+        y = root.winfo_y()
+        w = root.winfo_width()
+        h = root.winfo_height()
+        sw = root.winfo_screenwidth()
+        sh = root.winfo_screenheight()
+        margin = 8
+        if x + w > sw:
+            x = sw - w - margin
+        if y + h > sh:
+            y = sh - h - margin
+        if x < margin:
+            x = margin
+        if y < margin:
+            y = margin
+        root.geometry(f"+{x}+{y}")
 
     def _drag_start(event):
         state["drag_x"] = event.x_root
