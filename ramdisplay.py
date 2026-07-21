@@ -214,7 +214,38 @@ def collect() -> MemInfo:
 
 
 # -----------------------------------------------------------------------
-#  Tray icon drawing -- large centred number, solid background
+#  Color gradient — smooth transition green -> amber -> red
+# -----------------------------------------------------------------------
+
+def _usage_color(percent: float) -> tuple[int, int, int]:
+    """
+    Return an RGB tuple smoothly interpolated from green to amber to red.
+
+      0%         50%        100%
+    green ---- amber ---- red
+    """
+    green = (76, 175, 80)
+    amber = (255, 193, 7)
+    red = (244, 67, 54)
+
+    if percent <= 50:
+        t = max(0.0, min(1.0, percent / 50.0))
+        return (
+            int(green[0] + (amber[0] - green[0]) * t),
+            int(green[1] + (amber[1] - green[1]) * t),
+            int(green[2] + (amber[2] - green[2]) * t),
+        )
+    else:
+        t = max(0.0, min(1.0, (percent - 50) / 50.0))
+        return (
+            int(amber[0] + (red[0] - amber[0]) * t),
+            int(amber[1] + (red[1] - amber[1]) * t),
+            int(amber[2] + (red[2] - amber[2]) * t),
+        )
+
+
+# -----------------------------------------------------------------------
+#  Tray icon drawing
 # -----------------------------------------------------------------------
 
 def make_icon(percent: float) -> Image.Image:
@@ -223,12 +254,7 @@ def make_icon(percent: float) -> Image.Image:
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    if percent < 50:
-        color = (76, 175, 80)      # green
-    elif percent < 80:
-        color = (255, 193, 7)      # amber
-    else:
-        color = (244, 67, 54)      # red
+    color = _usage_color(percent)
 
     # Circle outline only (no background fill)
     m = 3
@@ -239,7 +265,7 @@ def make_icon(percent: float) -> Image.Image:
         width=4,
     )
 
-    # Large white number (adaptable to both light/dark trays)
+    # Large white number
     text = f"{int(percent)}"
     try:
         font = ImageFont.truetype("segoeui.ttf", 32)
@@ -712,12 +738,15 @@ def _open_memory_panel() -> None:
     root.after(500, lambda: root.attributes("-topmost", False))
 
     # -- Draw graph --------------------------------------------------
-    def _draw_graph():
+    def _draw_graph(pct: float):
         graph_canvas.delete("all")
         w = graph_canvas.winfo_width()
         h = graph_canvas.winfo_height()
         if w < 2:
             w, h = 460, 140
+
+        line_color = _usage_color(pct)
+        hex_color = f"#{line_color[0]:02x}{line_color[1]:02x}{line_color[2]:02x}"
 
         # Grid lines at 25 / 50 / 75 / 100 %
         for i in range(1, 5):
@@ -740,13 +769,13 @@ def _open_memory_panel() -> None:
         flat = []
         for p in poly:
             flat.extend(p)
-        graph_canvas.create_polygon(flat, fill=GRAPH_LINE, outline="")
+        graph_canvas.create_polygon(flat, fill=hex_color, outline="")
 
         # Line on top
         lflat = []
         for p in coords:
             lflat.extend(p)
-        graph_canvas.create_line(lflat, fill=GRAPH_LINE, width=2, smooth=True)
+        graph_canvas.create_line(lflat, fill=hex_color, width=2, smooth=True)
 
     # -- Draw composition bar ----------------------------------------
     def _draw_comp(d: MemInfo):
@@ -760,8 +789,12 @@ def _open_memory_panel() -> None:
             return
         inuse_w = w * d["in_use"] / total
         cached_w = w * d["cached"] / total
+
+        # Gradient-derived colour for 'in use' segment
+        inuse_color = _usage_color(d["percent"])
+        hex_inuse = f"#{inuse_color[0]:02x}{inuse_color[1]:02x}{inuse_color[2]:02x}"
         comp_canvas.create_rectangle(0, 0, max(inuse_w, 1), h,
-                                     fill=COMP_INUSE, outline="")
+                                     fill=hex_inuse, outline="")
         comp_canvas.create_rectangle(inuse_w, 0, inuse_w + cached_w, h,
                                      fill=COMP_CACHED, outline="")
         comp_canvas.create_line(inuse_w, 0, inuse_w, h,
@@ -776,7 +809,7 @@ def _open_memory_panel() -> None:
             total_gb = d["total"] / (1024 ** 3)
             total_lbl.config(text=f"{total_gb:.0f} GB")
 
-            _draw_graph()
+            _draw_graph(pct)
             _draw_comp(d)
 
             inuse_val = _fmt(d["in_use"])
