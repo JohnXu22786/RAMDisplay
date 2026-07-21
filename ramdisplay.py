@@ -31,7 +31,7 @@ from PIL import Image, ImageDraw, ImageFont
 #  App metadata
 # -----------------------------------------------------------------------
 
-VERSION = "0.1.16"
+VERSION = "0.1.17"
 AUTHOR = "JohnXu22786"
 GITHUB_URL = "https://github.com/JohnXu22786/RAMDisplay"
 APP_NAME = "RAMDisplay"
