@@ -218,7 +218,7 @@ def collect() -> MemInfo:
 # -----------------------------------------------------------------------
 
 def make_icon(percent: float) -> Image.Image:
-    """Create a 64x64 tray icon: circle with centred number."""
+    """Circle outline in status colour + white number, no fill."""
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -226,23 +226,23 @@ def make_icon(percent: float) -> Image.Image:
     if percent < 50:
         color = (76, 175, 80)      # green
     elif percent < 80:
-        color = (200, 160, 50)     # amber
+        color = (255, 193, 7)      # amber
     else:
-        color = (180, 55, 55)      # soft red
+        color = (244, 67, 54)      # red
 
-    # Circle
-    m = 2
+    # Circle outline only (no background fill)
+    m = 3
     draw.ellipse(
         [m, m, size - m, size - m],
-        fill=color + (220,),
+        fill=None,
         outline=color,
-        width=2,
+        width=4,
     )
 
-    # Large centred number
+    # Large white number (adaptable to both light/dark trays)
     text = f"{int(percent)}"
     try:
-        font = ImageFont.truetype("segoeui.ttf", 28)
+        font = ImageFont.truetype("segoeui.ttf", 32)
     except Exception:
         font = ImageFont.load_default()
 
