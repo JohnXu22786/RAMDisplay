@@ -326,9 +326,19 @@ def check_for_updates() -> str | None:
 
 _stop_icon: pystray.Icon | None = None
 
+# Shared state between download thread and updater thread
+_download_progress: dict = {
+    "active": False,
+    "version": "",
+    "percent": 0,
+    "failed": False,
+    "error": "",
+}
+
 
 def _do_update_check() -> None:
-    global _stop_icon
+    global _stop_icon, _download_progress
+
     latest = check_for_updates()
     if latest is None:
         _user32.MessageBoxW(0, "You are up to date (v" + VERSION + ").",
@@ -356,15 +366,82 @@ def _do_update_check() -> None:
     exe_name = APP_NAME + "-v" + latest + ".exe"
     url = GITHUB_URL + "/releases/download/v" + latest + "/" + exe_name
     temp_exe = os.path.join(os.environ["TEMP"], exe_name)
+
+    # ---- Download with progress + auto-retry ----
+    max_attempts = 3
+
+    for attempt in range(1, max_attempts + 1):
+        _download_progress["active"] = True
+        _download_progress["version"] = latest
+        _download_progress["percent"] = 0
+        _download_progress["failed"] = False
+        _download_progress["error"] = ""
+
+        if attempt > 1:
+            # Set tooltip to show retry
+            _download_progress["percent"] = -1  # signal "retrying"
+
+        try:
+            # Use urllib with a progress callback
+            def _reporthook(count, block_size, total_size):
+                if total_size > 0:
+                    p = int(count * block_size * 100 / total_size)
+                    if p > 100:
+                        p = 100
+                    _download_progress["percent"] = p
+                else:
+                    _download_progress["percent"] = 0
+
+            urllib.request.urlretrieve(url, temp_exe, _reporthook)
+
+            # Verify download
+            if not os.path.isfile(temp_exe) or os.path.getsize(temp_exe) == 0:
+                raise RuntimeError("Downloaded file is empty or missing")
+
+            # Success — proceed to install
+            _download_progress["active"] = False
+            _install_update(temp_exe, latest)
+            return
+
+        except Exception as e:
+            _download_progress["active"] = False
+            err_msg = str(e)
+
+            if attempt < max_attempts:
+                rc = _user32.MessageBoxW(
+                    0,
+                    "Download failed (attempt " + str(attempt) + "/" + str(max_attempts) + "):\n"
+                    + err_msg + "\n\nRetry?",
+                    APP_NAME + " - Download Failed",
+                    0x04 | 0x10 | 0x10000,  # Yes/No, Error icon
+                )
+                if rc != 6:  # IDYES
+                    return
+                # Clean up partial file
+                try:
+                    os.remove(temp_exe)
+                except Exception:
+                    pass
+            else:
+                _user32.MessageBoxW(
+                    0,
+                    "Download failed after " + str(max_attempts) + " attempts:\n"
+                    + err_msg,
+                    APP_NAME + " - Update Failed",
+                    0x10,
+                )
+                return
+
+
+def _install_update(temp_exe: str, version: str) -> None:
+    """Create batch updater and trigger self-replace."""
+    global _download_progress
+    _download_progress["active"] = False
+
+    current_exe = sys.executable
+    bat_path = os.path.join(os.environ["TEMP"], "update_ramdisplay.bat")
+
     try:
-        _user32.MessageBoxW(0, "Downloading " + exe_name + " ...\n\n"
-                            "The app will restart automatically when done.",
-                            APP_NAME + " - Downloading", 0)
-        urllib.request.urlretrieve(url, temp_exe)
-        if not os.path.isfile(temp_exe):
-            raise RuntimeError("Download failed - file not found")
-        current_exe = sys.executable
-        bat_path = os.path.join(os.environ["TEMP"], "update_ramdisplay.bat")
         with open(bat_path, "w", encoding="ascii") as f:
             f.write(
                 "@echo off\r\n"
@@ -384,8 +461,10 @@ def _do_update_check() -> None:
         if _stop_icon:
             _stop_icon.stop()
     except Exception as e:
-        _user32.MessageBoxW(0, "Update failed:\n" + str(e),
-                            APP_NAME + " - Error", 0x10)
+        _user32.MessageBoxW(
+            0, "Failed to start updater:\n" + str(e),
+            APP_NAME + " - Error", 0x10,
+        )
 
 
 # -----------------------------------------------------------------------
@@ -586,9 +665,19 @@ def main() -> None:
     def updater() -> None:
         while True:
             try:
-                d = collect()
-                icon.icon = make_icon(d["percent"])
-                icon.title = d["tip"]
+                dp = _download_progress
+                if dp["active"]:
+                    if dp["percent"] < 0:
+                        icon.title = "Retrying download of v" + dp["version"] + " ..."
+                    else:
+                        icon.title = (
+                            "Downloading v" + dp["version"] + " ... "
+                            + str(dp["percent"]) + "%"
+                        )
+                else:
+                    d = collect()
+                    icon.icon = make_icon(d["percent"])
+                    icon.title = d["tip"]
             except Exception:
                 pass
             time.sleep(1)
