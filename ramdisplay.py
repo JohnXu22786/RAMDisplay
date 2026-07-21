@@ -247,9 +247,10 @@ def make_icon(percent: float) -> Image.Image:
         font = ImageFont.load_default()
 
     bbox = draw.textbbox((0, 0), text, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    text_cx = (bbox[0] + bbox[2]) / 2
+    text_cy = (bbox[1] + bbox[3]) / 2
     draw.text(
-        ((size - tw) / 2, (size - th) / 2),
+        (size / 2 - text_cx, size / 2 - text_cy),
         text, fill=(255, 255, 255, 255), font=font,
     )
     return img
@@ -651,8 +652,11 @@ def _open_memory_panel() -> None:
     def _unpin():
         state["pinned"] = False
         root.overrideredirect(False)
-        root.attributes("-topmost", False)
         root.geometry("500x520")
+        root.update_idletasks()
+        # Ensure the window stays fully on-screen
+        _ensure_on_screen()
+        root.attributes("-topmost", False)
         # Unbind dragging
         data_frame.unbind("<Button-1>")
         data_frame.unbind("<B1-Motion>")
@@ -662,6 +666,26 @@ def _open_memory_panel() -> None:
         pin_btn.config(fg=FG_DIM)
         # Show normal content
         normal_frame.pack(fill=tk.BOTH, expand=True, before=data_frame)
+
+    def _ensure_on_screen():
+        """Clamp window position so it is fully visible."""
+        root.update_idletasks()
+        x = root.winfo_x()
+        y = root.winfo_y()
+        w = root.winfo_width()
+        h = root.winfo_height()
+        sw = root.winfo_screenwidth()
+        sh = root.winfo_screenheight()
+        margin = 8
+        if x + w > sw:
+            x = sw - w - margin
+        if y + h > sh:
+            y = sh - h - margin
+        if x < margin:
+            x = margin
+        if y < margin:
+            y = margin
+        root.geometry(f"+{x}+{y}")
 
     def _drag_start(event):
         state["drag_x"] = event.x_root
