@@ -231,7 +231,7 @@ def make_icon(percent: float) -> Image.Image:
         [1, 1, size - 2, size - 2], radius=10,
         fill=color + (230,),
     )
-    text = f"{int(percent)}%"
+    text = f"{int(percent)}"
     try:
         font = ImageFont.truetype("segoeui.ttf", 30)
     except Exception:
@@ -515,14 +515,96 @@ def _open_memory_panel() -> None:
         show_about()
         return
 
-    # -- Build window ------------------------------------------------
+    BG = "#202020"
+    FG = "#ffffff"
+    FG_DIM = "#888888"
+    FG_VAL = "#ffffff"
+    GRAPH_BG = "#0e1621"
+    GRAPH_LINE = "#3a9adb"
+    GRAPH_GRID = "#2a2a3a"
+    BAR_OUTLINE = "#555555"
+    COMP_INUSE = "#1a3a5c"
+    COMP_CACHED = "#2176ae"
+    COMP_FREE = "#101020"
+
     root = tk.Tk()
     _memory_panel_window = root
     root.title("Memory")
-    root.geometry("380x500")
+    root.configure(bg=BG)
     root.resizable(False, False)
-    root.configure(bg="#1e1e1e")
 
+    # --- Header: "Memory" + total RAM -----------------------------
+    hdr = tk.Frame(root, bg=BG)
+    hdr.pack(fill=tk.X, padx=16, pady=(12, 0))
+    tk.Label(hdr, text="Memory", font=("Segoe UI", 20, "bold"),
+             fg=FG, bg=BG).pack(side=tk.LEFT)
+    hdr_right = tk.Frame(hdr, bg=BG)
+    hdr_right.pack(side=tk.RIGHT)
+    total_gb = [0.0]  # mutable; set on first update
+
+    total_lbl = tk.Label(hdr_right, text="-- GB",
+                         font=("Segoe UI", 11), fg=FG_DIM, bg=BG)
+    total_lbl.pack(side=tk.RIGHT)
+
+    # --- Memory usage subtitle ------------------------------------
+    tk.Label(root, text="Memory usage", font=("Segoe UI", 10),
+             fg=FG_DIM, bg=BG).pack(anchor="w", padx=16, pady=(8, 2))
+
+    # --- Graph canvas (60-second history) -------------------------
+    graph_frame = tk.Frame(root, bg=BAR_OUTLINE, bd=1, relief="solid")
+    graph_frame.pack(fill=tk.X, padx=16)
+
+    graph_canvas = tk.Canvas(graph_frame, height=140, bg=GRAPH_BG,
+                             highlightthickness=0, bd=0)
+    graph_canvas.pack(fill=tk.X, padx=1, pady=1)
+
+    # Labels under graph
+    graph_labels = tk.Frame(root, bg=BG)
+    graph_labels.pack(fill=tk.X, padx=16)
+    tk.Label(graph_labels, text="60 seconds", font=("Segoe UI", 9),
+             fg=FG_DIM, bg=BG).pack(side=tk.LEFT)
+    tk.Label(graph_labels, text="0", font=("Segoe UI", 9),
+             fg=FG_DIM, bg=BG).pack(side=tk.RIGHT)
+
+    # --- Memory composition subtitle ------------------------------
+    tk.Label(root, text="Memory composition", font=("Segoe UI", 10),
+             fg=FG_DIM, bg=BG).pack(anchor="w", padx=16, pady=(10, 2))
+
+    # --- Composition bar (outlined) -------------------------------
+    comp_bar_frame = tk.Frame(root, bg=BAR_OUTLINE, bd=1, relief="solid")
+    comp_bar_frame.pack(fill=tk.X, padx=16)
+    comp_canvas = tk.Canvas(comp_bar_frame, height=22, bg=COMP_FREE,
+                            highlightthickness=0, bd=0)
+    comp_canvas.pack(fill=tk.X, padx=1, pady=1)
+
+    # --- Data grid (two columns) ----------------------------------
+    data_frame = tk.Frame(root, bg=BG)
+    data_frame.pack(fill=tk.X, padx=16, pady=(12, 16))
+
+    val_lbls: dict[str, tk.Label] = {}
+
+    def _make_data_cell(parent, row, col, label_text):
+        """Create a label + value cell in the grid."""
+        f = tk.Frame(parent, bg=BG)
+        f.grid(row=row, column=col, sticky="w", padx=(0, 30), pady=2)
+        tk.Label(f, text=label_text, font=("Segoe UI", 9),
+                 fg=FG_DIM, bg=BG, anchor="w").pack(anchor="w")
+        val = tk.Label(f, text="--", font=("Segoe UI", 12, "bold"),
+                       fg=FG_VAL, bg=BG, anchor="w")
+        val.pack(anchor="w")
+        return val
+
+    val_lbls["In use"] = _make_data_cell(data_frame, 0, 0, "In use (Compressed)")
+    val_lbls["Available"] = _make_data_cell(data_frame, 0, 1, "Available")
+    val_lbls["Committed"] = _make_data_cell(data_frame, 1, 0, "Committed")
+    val_lbls["Cached"] = _make_data_cell(data_frame, 1, 1, "Cached")
+    val_lbls["Paged pool"] = _make_data_cell(data_frame, 2, 0, "Paged pool")
+    val_lbls["Non-paged pool"] = _make_data_cell(data_frame, 2, 1, "Non-paged pool")
+
+    # --- History buffer -------------------------------------------
+    history: list[float] = [0.0] * 60
+
+    # --- Close handler --------------------------------------------
     def _on_close() -> None:
         global _memory_panel_window
         _memory_panel_window = None
@@ -532,92 +614,107 @@ def _open_memory_panel() -> None:
     root.attributes("-topmost", True)
     root.after(500, lambda: root.attributes("-topmost", False))
 
-    # -- Usage bar ---------------------------------------------------
-    bar_frame = tk.Frame(root, bg="#1e1e1e")
-    bar_frame.pack(fill=tk.X, padx=16, pady=(16, 0))
-    bar_canvas = tk.Canvas(bar_frame, height=24, bg="#2d2d2d",
-                           highlightthickness=0, bd=0)
-    bar_canvas.pack(fill=tk.X)
-    bar_handle = bar_canvas.create_rectangle(0, 0, 0, 24, fill="#4caf50", width=0)
+    # --- Draw graph -----------------------------------------------
+    def _draw_graph():
+        graph_canvas.delete("all")
+        w = graph_canvas.winfo_width()
+        h = graph_canvas.winfo_height()
+        if w < 2:
+            w = 450
+            h = 140
 
-    # -- Big percentage ----------------------------------------------
-    pct_label = tk.Label(root, text="--%", font=("Segoe UI", 40, "bold"),
-                         fg="white", bg="#1e1e1e")
-    pct_label.pack(pady=(4, 0))
+        # Grid lines (horizontal at 25, 50, 75, 100%)
+        for i in range(1, 5):
+            y = h - h * i / 4
+            graph_canvas.create_line(0, y, w, y, fill=GRAPH_GRID, dash=(2, 4))
 
-    # -- In-use / Total ----------------------------------------------
-    usage_label = tk.Label(root, text="-- / -- GB",
-                           font=("Segoe UI", 11), fg="#cccccc", bg="#1e1e1e")
-    usage_label.pack()
+        # Build polygon points
+        points: list[tuple[float, float]] = []
+        for i, val in enumerate(history):
+            x = w * i / max(len(history) - 1, 1)
+            y = h - h * min(val, 100) / 100
+            points.append((x, y))
 
-    # -- Separator ---------------------------------------------------
-    sep = tk.Frame(root, height=1, bg="#3d3d3d")
-    sep.pack(fill=tk.X, padx=16, pady=12)
+        if len(points) >= 2:
+            # Filled area
+            poly = [(0, h)] + points + [(w, h)]
+            flat = []
+            for p in poly:
+                flat.extend(p)
+            graph_canvas.create_polygon(flat, fill=GRAPH_LINE, outline="",
+                                        stipple="gray25")
+            # Line on top
+            line_flat = []
+            for p in points:
+                line_flat.extend(p)
+            graph_canvas.create_line(line_flat, fill=GRAPH_LINE, width=2)
 
-    # -- Details grid ------------------------------------------------
-    details = tk.Frame(root, bg="#1e1e1e")
-    details.pack(fill=tk.BOTH, padx=20)
+    # --- Draw composition bar -------------------------------------
+    def _draw_comp_bar(d: MemInfo):
+        comp_canvas.delete("all")
+        w = comp_canvas.winfo_width()
+        h = comp_canvas.winfo_height()
+        if w < 2:
+            w = 450
+            h = 22
 
-    rows = [
-        ("In use (Compressed)", ""),
-        ("Available", ""),
-        ("Committed", ""),
-        ("Cached", ""),
-        ("Paged pool", ""),
-        ("Non-paged pool", ""),
-        ("Total", ""),
-    ]
-    val_labels: list[tk.Label] = []
+        total = d["total"]
+        if total == 0:
+            return
 
-    for i, (label, _) in enumerate(rows):
-        lbl = tk.Label(details, text=label, font=("Segoe UI", 10),
-                       fg="#999999", bg="#1e1e1e", anchor="w")
-        lbl.grid(row=i, column=0, sticky="w", pady=3)
-        val = tk.Label(details, text="...", font=("Segoe UI", 10, "bold"),
-                       fg="white", bg="#1e1e1e", anchor="e")
-        val.grid(row=i, column=1, sticky="e", pady=3, padx=(20, 0))
-        val_labels.append(val)
+        inuse_w = w * d["in_use"] / total
+        cached_w = w * d["cached"] / total
 
-    # -- Update loop -------------------------------------------------
-    def _update_panel() -> None:
+        # In use segment
+        comp_canvas.create_rectangle(0, 0, max(inuse_w, 1), h,
+                                     fill=COMP_INUSE, outline="")
+        # Cached segment
+        comp_canvas.create_rectangle(inuse_w, 0, inuse_w + cached_w, h,
+                                     fill=COMP_CACHED, outline="")
+        # Rest is free (already COMP_FREE background)
+
+        # Thin vertical separator lines
+        comp_canvas.create_line(inuse_w, 0, inuse_w, h, fill="#444444", width=1)
+        comp_canvas.create_line(inuse_w + cached_w, 0, inuse_w + cached_w, h,
+                                fill="#444444", width=1)
+
+    # --- Update loop ----------------------------------------------
+    def _update():
         try:
             d = collect()
             pct = d["percent"]
+            total_gb[0] = d["total"] / (1024 ** 3)
+            total_lbl.config(text=f"{total_gb[0]:.0f} GB")
 
-            bar_w = int(bar_canvas.winfo_width() * pct / 100)
-            if pct < 50:
-                bar_fill = "#4caf50"
-            elif pct < 80:
-                bar_fill = "#ffc107"
-            else:
-                bar_fill = "#f44336"
-            bar_canvas.itemconfig(bar_handle, fill=bar_fill)
-            bar_canvas.coords(bar_handle, 0, 0, max(bar_w, 1), 24)
+            # History
+            history.append(pct)
+            if len(history) > 60:
+                history.pop(0)
 
-            pct_label.config(text=f"{int(pct)}%")
-            usage_label.config(
-                text=f"{d['in_use'] / 1024**3:.1f} / {d['total'] / 1024**3:.1f} GB"
+            _draw_graph()
+            _draw_comp_bar(d)
+
+            # Data values
+            inuse_val = _fmt(d["in_use"])
+            if d["compressed"]:
+                inuse_val += " (" + _fmt(d["compressed"]) + ")"
+            val_lbls["In use"].config(text=inuse_val)
+            val_lbls["Available"].config(text=_fmt(d["available"]))
+            val_lbls["Committed"].config(
+                text=_fmt(d["commit_total"]) + " / " + _fmt(d["commit_limit"])
             )
+            val_lbls["Cached"].config(text=_fmt(d["cached"]))
+            val_lbls["Paged pool"].config(text=_fmt(d["paged_pool"]))
+            val_lbls["Non-paged pool"].config(text=_fmt(d["nonpaged_pool"]))
 
-            vals = [
-                _fmt(d["in_use"]) + ("  (" + _fmt(d["compressed"]) + ")" if d["compressed"] else ""),
-                _fmt(d["available"]),
-                _fmt(d["commit_total"]) + " / " + _fmt(d["commit_limit"]) if d["commit_total"] else "N/A",
-                _fmt(d["cached"]),
-                _fmt(d["paged_pool"]),
-                _fmt(d["nonpaged_pool"]),
-                _fmt(d["total"]),
-            ]
-            for i, v in enumerate(vals):
-                val_labels[i].config(text=v)
         except Exception:
             pass
         try:
-            root.after(1000, _update_panel)
+            root.after(1000, _update)
         except Exception:
             pass
 
-    _update_panel()
+    _update()
     root.mainloop()
 
 
